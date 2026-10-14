@@ -117,6 +117,11 @@ typeform:
     type:          {all_of: [[tournoi, initiation, participation, formule]], none: [nom, prenom, mail, telephone]}
     partner_name:  {all_of: [[coequipier, partenaire, binome, equipier], [nom, prenom]], none: [mail, email, telephone, niveau, taille]}
     partner_email: {all_of: [[coequipier, partenaire, binome, equipier], [mail, email]]}
+    partner_phone: {all_of: [[coequipier, partenaire, binome, equipier], [telephone, tel, portable, mobile, gsm]]}
+    partner_company: {all_of: [[coequipier, partenaire, binome, equipier], [entreprise, societe, agence]]}
+    partner_level: {all_of: [[coequipier, partenaire, binome, equipier], [niveau]]}
+    stakes:        {all_of: [[enjeu, enjeux, objectif, attente, attentes]], none: [coequipier, partenaire, binome, equipier]}
+    submitted:     {all_of: [[horodateur, horodatage, timestamp, submitted, soumis, date]], none: [naissance]}
 
 # Normalisation des réponses libres
 levels:

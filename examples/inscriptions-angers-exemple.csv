@@ -1,0 +1,10 @@
+﻿Horodateur;Prénom;Nom;Email;Téléphone;Entreprise;Niveau de jeu;Taille t-shirt;Vos enjeux pour cette journée;Prénom du coéquipier;Nom du coéquipier;Email du coéquipier;Téléphone du coéquipier;Niveau du coéquipier
+10/09/2026 09:10:00;Camille;Durand;camille.durand@exemple-fictif.fr;06 00 00 00 10;Société DUR (fictive);Intermédiaire;M;Rencontrer des prescripteurs;Hugo;Martin;hugo.martin@exemple-fictif.fr;06 00 00 01 10;Débutant
+11/09/2026 09:11:00;Hugo;Petit;hugo.petit@exemple-fictif.fr;06 00 00 00 11;Société PET (fictive);Confirmé;L;Développer le réseau local;Lea;Roux;lea.roux@exemple-fictif.fr;06 00 00 01 11;Confirmé
+12/09/2026 09:12:00;Nina;Lopez;nina.lopez@exemple-fictif.fr;06 00 00 00 12;Société LOP (fictive);Débutant;S;Passer un bon moment;;;;;
+13/09/2026 09:13:00;Marc;Bernard;marc.bernard@exemple-fictif.fr;06 00 00 00 13;Société BER (fictive);Intermédiaire;XL;Signer un partenariat;Anne;Girard;anne.girard@exemple-fictif.fr;06 00 00 01 13;
+14/09/2026 09:14:00;Julie;Moreau;julie.moreau@exemple-fictif.fr;06 00 00 00 14;Société MOR (fictive);Avancé;M;Présenter nos offres;Paul;Faure;paul.faure@exemple-fictif.fr;06 00 00 01 14;Avancé
+15/09/2026 09:15:00;Samir;Haddad;samir.haddad@exemple-fictif.fr;06 00 00 00 15;Société HAD (fictive);2 - Intermédiaire;L;Fidéliser des clients;;;;;
+16/09/2026 09:16:00;Eva;Blanc;eva.blanc@exemple-fictif.fr;06 00 00 00 16;Société BLA (fictive);Débutant;S;Découvrir le padel;Tom;Noel;tom.noel@exemple-fictif.fr;06 00 00 01 16;Débutant
+17/09/2026 09:17:00;Luc;Mercier;luc.mercier@exemple-fictif.fr;06 00 00 00 17;Société MER (fictive);Confirmé;XL;Réseau;Zoé;Fabre;zoé.fabre@exemple-fictif.fr;06 00 00 01 17;Intermédiaire
+18/09/2026 09:18:00;Ines;Chevalier;ines.chevalier@exemple-fictif.fr;06 00 00 00 18;Société CHE (fictive);Intermédiaire;M;Détente;;;;;

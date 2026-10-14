@@ -129,3 +129,26 @@ def test_every_event_page_renders_and_settings_are_honest(app):
     outlook = next(m.value for m in app.markdown if "Outlook" in m.value)
     assert "OK (vérifié)" not in outlook                       # jamais « OK » pour un connecteur inexistant
     assert any("non développé" in c.value for c in app.caption)
+
+
+def test_angers_event_page_with_signups_renders(app):
+    """Fiche ANGERS avec inscrits (équipes + solos) : participants et documents s'affichent sans erreur."""
+    from pathlib import Path
+    from padel import importer, store
+    from padel.config import load_settings
+    from padel.db import make_engine
+    goto(app, "Données")
+    next(b for b in app.button if "14 événements" in b.label).click().run()
+    eng = make_engine()
+    with eng.begin() as cx:
+        importer.import_signups(cx, Path("examples/inscriptions-angers-exemple.csv").read_bytes(), "ANGERS", load_settings())
+        eid = store.get_event(cx, "ANGERS")["id"]
+    goto(app, f"event:{eid}")
+    text = " ".join(c.value for c in app.caption)
+    assert "6 équipe(s) de 2" in text and "3 seul(s)" in text
+    next(b for b in app.button if b.label == "Calculer poules et planning").click().run()
+    assert not app.exception, app.exception
+    assert any("8 équipes · 2 poule(s)" in s.value for s in app.success)
+    next(b for b in app.button if "Enregistrer ces poules" in b.label).click().run()
+    with eng.connect() as cx:
+        assert {r["poule"] for r in store.list_registrations(cx, eid)} == {"A", "B"}

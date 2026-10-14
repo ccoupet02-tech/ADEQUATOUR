@@ -171,6 +171,17 @@ def list_registrations(cx, event_id: int | None = None) -> list[dict]:
     return rows
 
 
+def set_poules(cx, event_id: int, mapping: dict[int, str], actor: str = "utilisateur") -> int:
+    """Écrit la poule de chaque inscription (id d'inscription -> « A », « B »…). Retourne le nombre modifié."""
+    n = 0
+    for rid, poule in mapping.items():
+        res = cx.execute(update(registrations).where(and_(registrations.c.id == int(rid),
+                                                          registrations.c.event_id == event_id)).values(poule=poule))
+        n += res.rowcount or 0
+    log(cx, "poules", event_id, f"{n} inscription(s) affectée(s) à une poule", actor)
+    return n
+
+
 def set_invite_status(cx, registration_id: int, status: str, actor: str = "utilisateur") -> None:
     if status not in INVITE_STATUS:
         raise ValueError(f"Statut inconnu : {status}")

@@ -34,6 +34,9 @@ uniquement pour reprendre les données.
 | Lecture des e-mails et des réponses (Outlook / Microsoft Graph) | ⏳ dépend des autorisations de votre DSI |
 | Messages Teams | ⏳ idem |
 | Typeform en direct | ⏳ code existant (`padel/typeform.py`) à rebrancher sur la base |
+| Inscriptions du formulaire (export CSV du Google Sheet) : solo ou équipe de 2, niveau, e-mails, téléphones, enjeux ; poules ; étiquettes Word Avery L7160 ; export des équipes | ✅ fiche événement → Participants / Documents (exemple fictif : `examples/inscriptions-angers-exemple.csv`) |
+| Saisie des équipes dans adequat-padel-tour.com | ⏳ en attente du format accepté par l’outil (export CSV/Excel fourni en attendant) |
+| Message Teams à chaque inscription | ⏳ plus tard (nécessite les droits Microsoft) |
 | Classification des réponses par Claude | ⏳ après Outlook |
 | Comptes séparés par utilisateur | ❌ un seul mot de passe |
 

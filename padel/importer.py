@@ -12,7 +12,10 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 
+from sqlalchemy import select
+
 from . import store
+from .db import people
 from .config import Settings
 from .util import base_task_name, norm
 
@@ -221,6 +224,42 @@ def import_participants(cx, source, default_event: str | None = None, settings: 
         rep.created += r_new
         rep.updated += not r_new
     store.log(cx, "import_participants", None, rep.line(), "import")
+    return rep
+
+
+# ----------------------------------------------------------------------------- inscriptions (formulaire)
+def import_signups(cx, source, event: str, settings: Settings | None = None, dry_run: bool = False) -> Report:
+    """Importe l'export du formulaire (Google Sheet / Typeform). Une ligne = 1 inscrit ou 2 joueurs en équipe.
+    Rejouable sans doublon : une personne déjà connue est complétée, jamais dupliquée."""
+    from .signups import parse_signups
+    rep = Report("Inscriptions")
+    ev = store.get_event(cx, event)
+    if not ev:
+        rep.warnings.append(f"événement « {event} » introuvable")
+        return rep
+    signups, warns, _ = parse_signups(read_rows(source), settings)
+    rep.warnings.extend(warns)
+    teams = solos = 0
+    for s in signups:
+        for p in s["players"]:
+            if dry_run:
+                known = cx.execute(select(people.c.id).where(people.c.pkey == store.person_key(
+                    p["prenom"], p["nom"], p["email"], p["company"]))).first()
+                rep.created += 0 if known else 1
+                rep.updated += 1 if known else 0
+                continue
+            pid, _ = store.upsert_person(cx, prenom=p["prenom"], nom=p["nom"], email=p["email"], phone=_clean_phone(p["phone"]),
+                                         company=p["company"], source="formulaire")
+            _, new = store.upsert_registration(
+                cx, ev["id"], pid, type=p["type"] or "Tournoi", team=s["team"], size=p["size"], level=p["level"],
+                stakes=s["stakes"], registered_at=s["registered_at"], source="formulaire", invite_status="accepte")
+            rep.created += new
+            rep.updated += not new
+        teams += len(s["players"]) == 2
+        solos += len(s["players"]) == 1
+    rep.warnings.insert(0, f"{teams} équipe(s) de 2 · {solos} inscrit(s) seul(s)")
+    if not dry_run:
+        store.log(cx, "import_signups", ev["id"], rep.line() + f" ({teams} équipes, {solos} solos)", "import")
     return rep
 
 

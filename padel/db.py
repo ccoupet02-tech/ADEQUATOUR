@@ -67,6 +67,8 @@ registrations = Table(
     Column("invited_at", DateTime),
     Column("responded_at", DateTime),
     Column("source", String(60), default=""),
+    Column("stakes", Text, default=""),                # enjeux / attentes indiqués dans le formulaire
+    Column("registered_at", DateTime),                 # horodatage de l'inscription (formulaire)
     UniqueConstraint("event_id", "person_id", name="uq_registration"),
 )
 

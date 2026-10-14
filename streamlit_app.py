@@ -373,11 +373,28 @@ def tab_tasks(cx, ev):
 def tab_people(cx, ev):
     regs = store.list_registrations(cx, ev["id"])
     acc = sum(r["invite_status"] == "accepte" for r in regs)
-    st.caption(f"{len(regs)} inscrit(s) · {acc} accepté(s)")
+    n_team = len({r["team"] for r in regs if r["team"]})
+    n_solo = sum(1 for r in regs if not r["team"])
+    st.caption(f"{len(regs)} inscrit(s) · {n_team} équipe(s) de 2 · {n_solo} seul(s) (appariés par niveau à la constitution des poules) · {acc} accepté(s)")
+    with st.expander("Importer les inscriptions du formulaire (Google Sheet / Typeform)", expanded=not regs):
+        st.caption("Exportez le Google Sheet en CSV (Fichier → Télécharger → .csv). Une ligne = un inscrit seul, ou deux joueurs "
+                   "si un coéquipier est renseigné. Rejouable sans doublon : à chaque nouvel export, seuls les nouveaux inscrits sont ajoutés.")
+        up = st.file_uploader("Fichier CSV", type=["csv"], key=f"signup-up-{ev['id']}")
+        if up is not None:
+            data = up.getvalue()
+            sim = importer.import_signups(cx, data, ev["name"], get_settings(), dry_run=True)
+            st.info("Simulation : " + sim.line())
+            for w in sim.warnings:
+                st.warning(w)
+            if st.button("Importer ces inscriptions", key=f"signup-go-{ev['id']}"):
+                rep = importer.import_signups(cx, data, ev["name"], get_settings())
+                flash(rep.line())
+                rerun(cx)
     if regs:
         df = pd.DataFrame([{"id": r["id"], "Prénom": r["prenom"], "Nom": r["nom"], "Entreprise": r["company"],
-                            "E-mail": r["email"], "Type": r["type"], "Équipe": r["team"], "Poule": r["poule"],
-                            "T-shirt": r["size"], "Niveau": r["level"], "Invitation": INVITE_LABELS[r["invite_status"]]}
+                            "E-mail": r["email"], "Téléphone": r["phone"], "Type": r["type"], "Équipe": r["team"],
+                            "Niveau": r["level"], "Enjeux": r["stakes"], "Poule": r["poule"],
+                            "T-shirt": r["size"], "Invitation": INVITE_LABELS[r["invite_status"]]}
                            for r in regs])
         edited = st.data_editor(df, hide_index=True, key=f"regs-{ev['id']}", column_order=[c for c in df.columns if c != "id"],
                                 disabled=[c for c in df.columns if c != "Invitation"],
@@ -415,8 +432,16 @@ def tab_staff(cx, ev):
         st.success(f"{n} membre(s) enregistré(s).")
 
 
+def _with_poules(parts, plan):
+    """Copie des participants avec leur poule calculée (pour imprimer la poule sur l'étiquette)."""
+    from dataclasses import replace
+    where = {m.id: po.name for po in plan.poules for t in po.teams for m in t.members}
+    return [replace(p, poule=where.get(p.id, p.poule)) for p in parts]
+
+
 def tab_documents(cx, ev):
     from padel.documents import diplomas_pdf, labels_pdf, planning_pdf, poules_pdf, referee_pdf
+    from padel.documents_docx import labels_docx, tournament_csv, tournament_xlsx
     from padel.logistics import logistics_report
     from padel.participants import Participant, active_participants
     from padel.tournament import plan_tournament
@@ -442,11 +467,23 @@ def tab_documents(cx, ev):
                  "arbitres.pdf": referee_pdf(out / "arbitres.pdf", settings.brand, ev["name"], plan),
                  "diplomes.pdf": diplomas_pdf(out / "diplomes.pdf", settings.brand, ev["name"], ev["date"], active_participants(parts, settings)),
                  "etiquettes.pdf": labels_pdf(out / "etiquettes.pdf", settings.brand, ev["name"], active_participants(parts, settings))}
+        word = labels_docx(out / "etiquettes-avery-L7160.docx", settings.brand, ev["name"], active_participants(_with_poules(parts, plan), settings))
+        files["etiquettes-avery-L7160.docx"] = word
+        st.session_state[f"tool-{ev['id']}"] = {"equipes-poules.csv": tournament_csv(plan), "equipes-poules.xlsx": tournament_xlsx(plan)}
+        st.session_state[f"poules-map-{ev['id']}"] = {int(m.id): po.name for po in plan.poules for t in po.teams for m in t.members}
         st.session_state[f"docs-{ev['id']}"] = {n: open(p, "rb").read() for n, p in files.items()}
         st.session_state[f"plan-info-{ev['id']}"] = (f"{len(plan.teams)} équipes · {len(plan.poules)} poule(s) · {len(plan.matches)} matchs",
                                                      list(plan.warnings))
     docs = st.session_state.get(f"docs-{ev['id']}")
     if docs:
+        tool = st.session_state.get(f"tool-{ev['id']}", {})
+        st.caption("Export pour l'outil de tournoi (une ligne par équipe) :")
+        for col, (name, data) in zip(st.columns(max(len(tool), 1)), tool.items()):
+            col.download_button(f"⬇ {name}", data, file_name=f"{slug(ev['name'])}-{name}", key=f"dlt-{ev['id']}-{name}")
+        if st.button("Enregistrer ces poules dans les fiches participants", key=f"save-poules-{ev['id']}"):
+            n = store.set_poules(cx, ev["id"], st.session_state[f"poules-map-{ev['id']}"])
+            flash(f"{n} inscrit(s) affecté(s) à une poule.")
+            rerun(cx)
         info, warns = st.session_state[f"plan-info-{ev['id']}"]
         st.success(info)
         for w in warns:
