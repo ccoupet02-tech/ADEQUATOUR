@@ -96,3 +96,19 @@ def parse_signups(rows: list[dict], settings: Settings | None = None) -> tuple[l
             if seen[k] > 1:
                 s["team"] = f"{s['team']} ({seen[k]})"
     return out, warnings, mapping
+
+
+def typeform_rows(form: dict, responses: list[dict]) -> list[dict]:
+    """Réponses Typeform -> lignes {intitulé de la question normalisé: réponse}, au même format que l'export CSV."""
+    from .typeform import answer_value, flatten_fields
+    titles = {f["id"]: norm(f["title"]) for f in flatten_fields(form.get("fields"))}
+    rows = []
+    for r in sorted(responses, key=lambda x: x.get("submitted_at", "")):
+        row = {"submitted_at": (r.get("submitted_at") or "").replace("T", " ").replace("Z", "")}
+        for a in r.get("answers", []):
+            t = titles.get(a["field"]["id"])
+            v = answer_value(a)
+            if t and v not in (None, ""):
+                row[t] = str(v).strip()
+        rows.append(row)
+    return rows

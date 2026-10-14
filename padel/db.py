@@ -34,6 +34,7 @@ events = Table(
     Column("contact_email", String(200), default=""),
     Column("notes", Text, default=""),
     Column("report", Text, default=""),                # bilan post-événement
+    Column("typeform_id", String(60), default=""),     # identifiant du formulaire Typeform d'inscription
     Column("created_at", DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)),
 )
 

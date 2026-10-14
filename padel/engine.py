@@ -14,6 +14,7 @@ Il N'ENVOIE RIEN : aucun connecteur d'envoi n'est branché. Un envoi ne pourra v
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import traceback
 from dataclasses import dataclass, field
@@ -112,7 +113,21 @@ def wf_relances(cx, settings: Settings, ev: dict, today: date, res: EngineResult
     return prepared, 0
 
 
-WORKFLOWS = {"invitations": wf_invitations, "relances": wf_relances}
+def wf_typeform(cx, settings: Settings, ev: dict, today: date, res: EngineResult) -> tuple[int, int]:
+    """Récupère les nouvelles inscriptions du formulaire Typeform de l'événement (si un jeton est configuré)."""
+    if not (ev.get("typeform_id") or "").strip() or not settings.env.get("TYPEFORM_TOKEN"):
+        return 0, 0   # rien à faire : on ne simule jamais une synchronisation
+    from .importer import sync_typeform
+    rep = sync_typeform(cx, ev["name"], settings.typeform_client(), settings)
+    flagged = 0
+    for w in rep.warnings:
+        if w.startswith("ligne") and ("non reconnu" in w or "incomplet" in w):
+            flagged += store.add_pending(cx, f"tf:{ev['id']}:{hashlib.md5(w.encode()).hexdigest()[:10]}", "donnee_manquante",
+                                         f"Inscription à vérifier ({ev['name']})", w, ev["id"])
+    return rep.created, flagged
+
+
+WORKFLOWS = {"typeform": wf_typeform, "invitations": wf_invitations, "relances": wf_relances}
 
 
 # ----------------------------------------------------------------------------- exécution

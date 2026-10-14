@@ -377,11 +377,43 @@ def tab_tasks(cx, ev):
 
 def tab_people(cx, ev):
     regs = store.list_registrations(cx, ev["id"])
-    acc = sum(r["invite_status"] == "accepte" for r in regs)
-    n_team = len({r["team"] for r in regs if r["team"]})
-    n_solo = sum(1 for r in regs if not r["team"])
-    st.caption(f"{len(regs)} inscrit(s) · {n_team} équipe(s) de 2 · {n_solo} seul(s) (appariés par niveau à la constitution des poules) · {acc} accepté(s)")
-    with st.expander("Importer les inscriptions du formulaire (Google Sheet / Typeform)", expanded=not regs):
+    k = store.participation(regs, ev["capacity"])
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Participants", k["participants"], help="Hors cocktail et refus")
+    c2.metric("Équipes de 2", k["teams"])
+    c3.metric("Inscrits seuls", k["solos"], help="Appariés par niveau à la constitution des poules")
+    c4.metric("Places restantes", "—" if k["places_left"] is None else k["places_left"],
+              help="Capacité de l'événement moins participants" if ev["capacity"] else "Renseignez la capacité dans Vue d'ensemble")
+    st.caption(f"Soit **{k['teams_total']} équipe(s)** au total une fois les inscrits seuls appariés"
+               + (" (un joueur resterait sans coéquipier)." if k["odd"] else "."))
+    with st.expander("Connexion Typeform (inscriptions automatiques)", expanded=not ev["typeform_id"]):
+        tid = st.text_input("Identifiant du formulaire Typeform", value=ev["typeform_id"] or "", key=f"tfid-{ev['id']}",
+                            help="La fin de l'adresse du formulaire : https://xxx.typeform.com/to/IDENTIFIANT")
+        if tid.strip() != (ev["typeform_id"] or "") and st.button("Enregistrer l'identifiant", key=f"tfid-save-{ev['id']}"):
+            store.update_event(cx, ev["id"], typeform_id=tid.strip())
+            rerun(cx)
+        if not os.environ.get("TYPEFORM_TOKEN"):
+            st.warning("Aucun jeton Typeform : ajoutez `TYPEFORM_TOKEN` dans les Secrets Streamlit (et dans les secrets GitHub "
+                       "pour la synchro automatique toutes les 15 minutes).")
+        elif ev["typeform_id"]:
+            b1, b2 = st.columns(2)
+            if b1.button("Simuler la synchronisation", key=f"tf-sim-{ev['id']}"):
+                try:
+                    rep = importer.sync_typeform(cx, ev["name"], get_settings().typeform_client(), get_settings(), dry_run=True)
+                    st.info("Simulation : " + rep.line())
+                    for w in rep.warnings:
+                        st.warning(w)
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Typeform : {exc}")
+            if b2.button("Synchroniser maintenant", key=f"tf-go-{ev['id']}"):
+                try:
+                    rep = importer.sync_typeform(cx, ev["name"], get_settings().typeform_client(), get_settings())
+                    flash(rep.line())
+                    rerun(cx)
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Typeform : {exc}")
+        st.caption("Une fois l'identifiant et le jeton en place, le moteur récupère seul les nouvelles inscriptions toutes les 15 minutes.")
+    with st.expander("Importer un fichier CSV (Google Sheet) à la place", expanded=False):
         st.caption("Exportez le Google Sheet en CSV (Fichier → Télécharger → .csv). Une ligne = un inscrit seul, ou deux joueurs "
                    "si un coéquipier est renseigné. Rejouable sans doublon : à chaque nouvel export, seuls les nouveaux inscrits sont ajoutés.")
         up = st.file_uploader("Fichier CSV", type=["csv"], key=f"signup-up-{ev['id']}")

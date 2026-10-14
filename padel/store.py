@@ -171,6 +171,18 @@ def list_registrations(cx, event_id: int | None = None) -> list[dict]:
     return rows
 
 
+def participation(regs: list[dict], capacity: int | None = None) -> dict:
+    """Chiffres clés des inscriptions : participants, équipes de 2, inscrits seuls, équipes à constituer, places."""
+    tournoi = [r for r in regs if (r["type"] or "Tournoi").lower() != "cocktail"
+               and r["invite_status"] != "refuse"]
+    teams = {norm(r["team"]) for r in tournoi if r["team"]}
+    solos = sum(1 for r in tournoi if not r["team"])
+    out = {"participants": len(tournoi), "teams": len(teams), "solos": solos,
+           "teams_total": len(teams) + (solos + 1) // 2, "odd": bool(solos % 2)}
+    out["places_left"] = None if not capacity else max(capacity - len(tournoi), 0)
+    return out
+
+
 def set_poules(cx, event_id: int, mapping: dict[int, str], actor: str = "utilisateur") -> int:
     """Écrit la poule de chaque inscription (id d'inscription -> « A », « B »…). Retourne le nombre modifié."""
     n = 0
@@ -311,6 +323,7 @@ def kpis(cx, today: date, soon_days: int = 7) -> dict:
 DEFAULT_AUTOMATIONS = [
     ("invitations", "Préparer les invitations dues (aperçu)"),
     ("relances", "Préparer les relances sans réponse (aperçu)"),
+    ("typeform", "Récupérer les nouvelles inscriptions Typeform"),
 ]
 MAX_ATTEMPTS = 3
 

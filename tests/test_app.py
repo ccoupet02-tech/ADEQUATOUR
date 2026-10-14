@@ -144,8 +144,8 @@ def test_angers_event_page_with_signups_renders(app):
         importer.import_signups(cx, Path("examples/inscriptions-angers-exemple.csv").read_bytes(), "ANGERS", load_settings())
         eid = store.get_event(cx, "ANGERS")["id"]
     goto(app, f"event:{eid}")
-    text = " ".join(c.value for c in app.caption)
-    assert "6 équipe(s) de 2" in text and "3 seul(s)" in text
+    m = {x.label: x.value for x in app.metric}
+    assert m["Participants"] == "15" and m["Équipes de 2"] == "6" and m["Inscrits seuls"] == "3"
     next(b for b in app.button if b.label == "Calculer poules et planning").click().run()
     assert not app.exception, app.exception
     assert any("8 équipes · 2 poule(s)" in s.value for s in app.success)

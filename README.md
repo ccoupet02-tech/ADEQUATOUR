@@ -33,7 +33,7 @@ uniquement pour reprendre les données.
 | Envoi réel des mails | ⏳ non branché : marquage « envoyé » manuel |
 | Lecture des e-mails et des réponses (Outlook / Microsoft Graph) | ⏳ dépend des autorisations de votre DSI |
 | Messages Teams | ⏳ idem |
-| Typeform en direct | ⏳ code existant (`padel/typeform.py`) à rebrancher sur la base |
+| Typeform en direct (synchro à la demande + moteur toutes les 15 min) | ✅ code testé avec un faux Typeform ; à valider avec votre jeton |
 | Inscriptions du formulaire (export CSV du Google Sheet) : solo ou équipe de 2, niveau, e-mails, téléphones, enjeux ; poules ; étiquettes Word Avery L7160 ; export des équipes | ✅ fiche événement → Participants / Documents (exemple fictif : `examples/inscriptions-angers-exemple.csv`) |
 | Saisie des équipes dans adequat-padel-tour.com | ⏳ en attente du format accepté par l’outil (export CSV/Excel fourni en attendant) |
 | Message Teams à chaque inscription | ⏳ plus tard (nécessite les droits Microsoft) |

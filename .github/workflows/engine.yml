@@ -25,3 +25,4 @@ jobs:
       - run: python -m padel.engine
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TYPEFORM_TOKEN: ${{ secrets.TYPEFORM_TOKEN }}   # facultatif : sans lui, la synchro Typeform est ignorée

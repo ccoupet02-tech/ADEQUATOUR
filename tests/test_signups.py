@@ -80,3 +80,65 @@ def test_label_pages(env, tmp_path):
     people = [Participant(id=str(i), prenom=f"P{i}", nom=f"N{i:02d}") for i in range(25)]
     doc = Document(str(labels_docx(tmp_path / "l.docx", "B", "E", people)))
     assert len(doc.tables) == 2  # 21 étiquettes par page
+
+
+# ----------------------------------------------------------------------------- Typeform en direct
+class FakeTF:
+    TITLES = {"f1": "Prénom", "f2": "Nom", "f3": "Votre adresse e-mail", "f4": "Téléphone", "f5": "Entreprise",
+              "f6": "Votre niveau de padel", "f7": "Vos enjeux pour cette journée", "f8": "Prénom de votre coéquipier",
+              "f9": "Nom de votre coéquipier", "f10": "E-mail de votre coéquipier"}
+
+    def __init__(self, responses):
+        self.responses = responses
+
+    def get_form(self, form_id):
+        return {"fields": [{"id": k, "title": v, "type": "short_text"} for k, v in self.TITLES.items()]}
+
+    def iter_responses(self, form_id):
+        yield from self.responses
+
+
+def _resp(token, when, **ans):
+    names = {"prenom": "f1", "nom": "f2", "mail": "f3", "tel": "f4", "ent": "f5", "niv": "f6", "enj": "f7",
+             "pp": "f8", "pn": "f9", "pm": "f10"}
+    return {"token": token, "submitted_at": when,
+            "answers": [{"field": {"id": names[k]}, "type": "text", "text": v} for k, v in ans.items()]}
+
+
+RESPONSES = [
+    _resp("t1", "2026-10-01T08:00:00Z", prenom="Alice", nom="Roy", mail="alice@ex.fr", tel="0600000001", ent="Acme",
+          niv="Confirmé", enj="Réseau", pp="Bruno", pn="Lam", pm="bruno@ex.fr"),
+    _resp("t2", "2026-10-02T09:00:00Z", prenom="Chloé", nom="Vidal", mail="chloe@ex.fr", ent="Beta", niv="Débutant"),
+]
+
+
+def test_typeform_sync_creates_team_and_solo_and_is_idempotent(env):
+    eng, s = env
+    with eng.begin() as cx:
+        store.update_event(cx, store.get_event(cx, "ANGERS")["id"], typeform_id="FORM1")
+        sim = importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s, dry_run=True)
+        assert store.list_registrations(cx) == [] and sim.created == 3
+        r1 = importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s)
+        r2 = importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s)
+        regs = store.list_registrations(cx)
+        k = store.participation(regs, 60)
+    assert r1.created == 3 and r2.created == 0 and len(regs) == 3
+    assert k == {"participants": 3, "teams": 1, "solos": 1, "teams_total": 2, "odd": True, "places_left": 57}
+    lam = next(r for r in regs if r["nom"] == "Lam")
+    assert lam["team"] == "Lam / Roy" and lam["stakes"] == "Réseau" and lam["level"] == "Confirmé"
+
+
+def test_engine_syncs_typeform_only_with_a_token(env, monkeypatch):
+    from padel import engine
+    eng, s = env
+    with eng.begin() as cx:
+        store.update_event(cx, store.get_event(cx, "ANGERS")["id"], typeform_id="FORM1")
+    engine.run(eng, s, today=date(2026, 10, 3))
+    with eng.connect() as cx:
+        assert store.list_registrations(cx) == []          # pas de jeton : rien n'est simulé
+    s.env["TYPEFORM_TOKEN"] = "tfp_test"
+    monkeypatch.setattr(type(s), "typeform_client", lambda self: FakeTF(RESPONSES))
+    res = engine.run(eng, s, today=date(2026, 10, 3))
+    with eng.connect() as cx:
+        assert len(store.list_registrations(cx)) == 3
+    assert res.errors == 0

@@ -237,7 +237,7 @@ def import_signups(cx, source, event: str, settings: Settings | None = None, dry
     if not ev:
         rep.warnings.append(f"événement « {event} » introuvable")
         return rep
-    signups, warns, _ = parse_signups(read_rows(source), settings)
+    signups, warns, _ = parse_signups(source if isinstance(source, list) else read_rows(source), settings)
     rep.warnings.extend(warns)
     teams = solos = 0
     for s in signups:
@@ -261,6 +261,22 @@ def import_signups(cx, source, event: str, settings: Settings | None = None, dry
     if not dry_run:
         store.log(cx, "import_signups", ev["id"], rep.line() + f" ({teams} équipes, {solos} solos)", "import")
     return rep
+
+
+def sync_typeform(cx, event: str, client, settings: Settings | None = None, dry_run: bool = False) -> Report:
+    """Lit les réponses du formulaire Typeform de l'événement et les importe (même logique que le CSV)."""
+    from .signups import typeform_rows
+    ev = store.get_event(cx, event)
+    rep = Report("Typeform")
+    if not ev or not (ev.get("typeform_id") or "").strip():
+        rep.warnings.append("Aucun formulaire Typeform associé à cet événement.")
+        return rep
+    form_id = ev["typeform_id"].strip()
+    rows = typeform_rows(client.get_form(form_id), list(client.iter_responses(form_id)))
+    if not rows:
+        rep.warnings.append("Aucune réponse complète sur ce formulaire pour l'instant.")
+        return rep
+    return import_signups(cx, rows, event, settings, dry_run=dry_run)
 
 
 # ----------------------------------------------------------------------------- staff
