@@ -4,3 +4,6 @@ Jinja2>=3.1
 reportlab>=4.0
 python-dotenv>=1.0
 streamlit>=1.40
+SQLAlchemy>=2.0
+pg8000>=1.31
+pandas>=2.0

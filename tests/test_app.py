@@ -1,58 +1,101 @@
-"""Test de fumée de l'interface Streamlit (sans réseau : la lecture Notion est simulée)."""
+"""Test de fumée du dashboard Streamlit (base SQLite temporaire, aucun réseau)."""
 from datetime import date
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("streamlit")
+import streamlit as st  # noqa: E402
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
-from padel import events as events_mod  # noqa: E402
-from padel.events import Event  # noqa: E402
+APP = str(Path(__file__).parent.parent / "streamlit_app.py")
+PAGES = ["Accueil", "Événements", "Participants", "Automatisations", "À valider", "Données"]
 
 
-@pytest.fixture(autouse=True)
-def _clear_streamlit_cache():
-    import streamlit as st
+@pytest.fixture()
+def app(monkeypatch, tmp_path):
+    st.cache_resource.clear()
     st.cache_data.clear()
-    yield
-    st.cache_data.clear()
-
-
-def _fake_events(monkeypatch):
     monkeypatch.setenv("APP_PASSWORD", "pw")
-    for k in ("NOTION_TOKEN", "NOTION_EVENTS_DB", "NOTION_TASKS_DB", "NOTION_PARTICIPANTS_DB"):
-        monkeypatch.setenv(k, "x" * 32)
-    monkeypatch.setattr(events_mod, "list_events",
-                        lambda *a, **k: [Event(id="1", name="DIJON", date=date(2027, 1, 20), venue="Club")])
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
+    monkeypatch.setenv("PADEL_DEBUG", "1")
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    at.text_input[0].set_value("pw").run()
+    assert not at.exception, at.exception
+    yield at
+    st.cache_resource.clear()
 
 
-def test_password_gate_and_main_page(monkeypatch):
-    _fake_events(monkeypatch)
-    at = AppTest.from_file(str(Path(__file__).parent.parent / "streamlit_app.py"), default_timeout=30).run()
-    assert not at.exception
-    assert len(at.tabs) == 0  # verrouillé tant que le mot de passe n'est pas saisi
-    at.text_input[0].set_value("mauvais").run()
+def goto(at, page):
+    at.sidebar.radio[0].set_value(page).run()
+    assert not at.exception, f"{page}: {at.exception}"
+    return at
+
+
+def test_password_gate(monkeypatch, tmp_path):
+    st.cache_resource.clear()
+    monkeypatch.setenv("APP_PASSWORD", "pw")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 't.db'}")
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    assert len(at.metric) == 0
+    at.text_input[0].set_value("faux").run()
     assert at.error
-    at.text_input[0].set_value("pw").run()
-    assert not at.exception, at.exception
-    assert len(at.tabs) == 6
-    assert at.checkbox[0].value is False  # simulation par défaut
+    assert len(at.metric) == 0
 
 
-def test_app_never_passes_send():
-    from pathlib import Path
-    src = Path("streamlit_app.py").read_text(encoding="utf-8")
-    assert '"--send"' not in src
+def test_missing_password_secret_is_explicit(monkeypatch):
+    monkeypatch.delenv("APP_PASSWORD", raising=False)
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    assert any("APP_PASSWORD" in e.value for e in at.error)
 
 
-def test_missing_notion_secret_shows_message(monkeypatch):
-    monkeypatch.setenv("APP_PASSWORD", "pw")
-    for k in ("NOTION_TOKEN", "NOTION_EVENTS_DB", "NOTION_TASKS_DB", "NOTION_PARTICIPANTS_DB"):
-        monkeypatch.delenv(k, raising=False)
-    monkeypatch.setattr("padel.config.load_dotenv", lambda *a, **k: None, raising=False)
-    at = AppTest.from_file(str(Path(__file__).parent.parent / "streamlit_app.py"), default_timeout=30).run()
-    at.text_input[0].set_value("pw").run()
-    assert not at.exception, at.exception
-    assert any("Connexion à Notion impossible" in e.value for e in at.error)
-    assert any("NOTION_TOKEN" in w.value for w in at.warning)
+def test_every_page_renders_on_empty_base(app):
+    for page in PAGES:
+        goto(app, page)
+
+
+def test_seed_then_pages_show_data(app):
+    goto(app, "Données")
+    seed = next(b for b in app.button if "14 événements" in b.label)
+    seed.click().run()
+    assert not app.exception, app.exception
+    assert any("14 créé" in s.value for s in app.success)
+    goto(app, "Accueil")
+    kpi = {m.label: m.value for m in app.metric}
+    assert int(kpi["Événements à venir"]) >= 8
+    for page in PAGES:
+        goto(app, page)
+    goto(app, "Événements")
+    assert len(app.tabs) == 7
+
+
+def test_data_survives_a_new_session(app):
+    """Régression : les écritures doivent être validées (commit) avant st.rerun()."""
+    goto(app, "Données")
+    next(b for b in app.button if "14 événements" in b.label).click().run()
+    st.cache_resource.clear()
+    from padel import store
+    from padel.db import make_engine
+    with make_engine().connect() as cx:
+        assert len(store.list_events(cx)) == 14
+
+
+def test_app_never_sends_mail():
+    src = Path(APP).read_text(encoding="utf-8")
+    assert "SmtpBackend" not in src and "GraphBackend" not in src and "smtplib" not in src
+
+
+def test_create_event_form_persists_across_rerun(app):
+    """Le formulaire appelle st.rerun() : l'événement et ses 22 tâches doivent être validés avant."""
+    goto(app, "Événements")
+    form = next(t for t in app.text_input if t.label == "Ville")
+    form.set_value("Marseille")
+    btn = next(b for b in app.button if "22 tâches" in b.label)
+    btn.click().run()
+    assert not app.exception, app.exception
+    st.cache_resource.clear()
+    from padel import store
+    from padel.db import make_engine
+    with make_engine().connect() as cx:
+        ev = store.get_event(cx, "MARSEILLE")
+        assert ev is not None and len(store.list_tasks(cx, ev["id"])) == 22

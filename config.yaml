@@ -154,6 +154,9 @@ mail:
   feedback_url: ""
   photos_url: ""
 
+engine:
+  relance_after_days: 7   # délai après l'invitation avant de préparer une relance
+
 digest:
   horizon_days: 90     # événements à venir pris en compte (doit dépasser le plus grand offset : 60 j)
   grace_days: 14       # événements passés encore suivis (retour/recap...)

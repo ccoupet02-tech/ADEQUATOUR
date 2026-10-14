@@ -1,4 +1,60 @@
-# Adéquat Padel Tour – pipeline d'automatisation
+# Adéquat Padel Tour – application de pilotage des événements
+
+L'application est désormais autonome : **base Neon (PostgreSQL) + dashboard Streamlit + moteur d'automatisation**.
+Notion n'est plus nécessaire ; l'ancien pipeline Notion (section « Pipeline Notion historique » plus bas) reste dans le dépôt
+uniquement pour reprendre les données.
+
+## Mise en route (15 minutes)
+
+1. **Neon** : copiez la *connection string* du projet (elle commence par `postgresql://`).
+2. **Streamlit Cloud** → votre application → *Settings → Secrets* (jamais dans le code ni dans une conversation) :
+   ```toml
+   APP_PASSWORD = "un-mot-de-passe-long"
+   DATABASE_URL = "postgresql://...?sslmode=require"
+   ```
+3. Ouvrez l'application → page **Données** → « Charger les 14 événements connus et leurs 22 tâches », puis importez vos
+   exports CSV de Notion (événements, tâches, participants, staff).
+4. **GitHub** → *Settings → Secrets and variables → Actions* → ajoutez `DATABASE_URL` : le workflow `padel-engine`
+   passe alors toutes les 15 minutes.
+
+## Fonctionnalités
+
+| Domaine | État |
+|---|---|
+| Base centrale (événements, personnes, inscriptions, tâches, staff, communications, journal, validations) | ✅ terminé |
+| Création d'un événement depuis le modèle (22 tâches, échéances calculées) | ✅ terminé |
+| Import des exports CSV de Notion, rejouable, dédoublonnage « Tâche (1) » | ✅ terminé |
+| Dashboard : accueil, événements, participants, automatisations, à valider, données, sauvegarde ZIP | ✅ terminé |
+| Moteur : aperçus d'invitations et de relances, anti-doublons, relance annulée si réponse, journal | ✅ terminé (mode aperçu) |
+| Poules, planning, PDF (planning, poules, arbitres, diplômes, étiquettes), t-shirts et repas | ✅ branché sur la base |
+| Envoi réel des mails | ⏳ non branché : marquage « envoyé » manuel en attendant Outlook |
+| Lecture des e-mails et réponses (Outlook / Microsoft Graph) | ⏳ dépend des autorisations de votre DSI |
+| Messages Teams | ⏳ idem |
+| Typeform (inscriptions en direct) | ⏳ code existant (`padel/typeform.py`) à rebrancher sur la base |
+| Classification des réponses par Claude | ⏳ après Outlook |
+| Comptes séparés par utilisateur | ❌ un seul mot de passe pour l'instant |
+
+## Garde-fous
+
+- Le moteur **n'envoie rien** : il prépare des aperçus relus dans « Automatisations ».
+- Une même communication n'est jamais préparée deux fois (clé d'idempotence en base, atomique).
+- `python -m padel.engine --dry-run` montre ce qui serait préparé sans rien écrire.
+- Les secrets ne sont que dans les Secrets Streamlit / GitHub ; `.env` et `data/` ne sont jamais versionnés.
+
+## Commandes
+
+```bash
+pip install -r requirements-dev.txt
+python -m padel.dbcli seed                          # jeu de départ
+python -m padel.dbcli import-tasks taches.csv       # exports Notion
+python -m padel.engine --dry-run                    # simulation du moteur
+streamlit run streamlit_app.py                      # dashboard local (base SQLite locale si DATABASE_URL absente)
+python -m pytest -q
+```
+
+---
+
+# Pipeline Notion historique
 
 Un seul outil en ligne de commande (Python 3.11+) qui fait tourner la logistique des événements autour de votre Notion :
 
