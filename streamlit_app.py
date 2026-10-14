@@ -107,10 +107,13 @@ with st.sidebar:
 
 try:
     events = events_cache()
-except Exception as exc:  # noqa: BLE001
+except (Exception, SystemExit) as exc:  # noqa: BLE001  (SystemExit : secret manquant dans load_settings)
     st.error(f"Connexion à Notion impossible : {exc}")
-    st.caption("Vérifiez NOTION_TOKEN et les 3 identifiants de base dans les Secrets, et que l'intégration "
-               "est ajoutée à chaque base (menu « … » → Connexions).")
+    missing = [k for k in ("NOTION_TOKEN", "NOTION_EVENTS_DB", "NOTION_TASKS_DB", "NOTION_PARTICIPANTS_DB")
+               if not os.environ.get(k)]
+    if missing:
+        st.warning("Secrets manquants : " + ", ".join(missing) + ". Ajoutez-les dans Settings → Secrets.")
+    st.caption("Vérifiez aussi que l'intégration Notion est ajoutée à chaque base (menu « … » → Connexions).")
     st.stop()
 
 names = [e["name"] for e in events]
