@@ -412,6 +412,13 @@ def tab_people(cx, ev):
                     rerun(cx)
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Typeform : {exc}")
+        if os.environ.get("TYPEFORM_TOKEN") and ev["typeform_id"] and st.button("Diagnostic du formulaire (sans données personnelles)", key=f"tf-diag-{ev['id']}"):
+            try:
+                from padel.signups import typeform_diagnostic
+                cl = get_settings().typeform_client()
+                st.code("\n".join(typeform_diagnostic(cl.get_form(ev["typeform_id"].strip()), list(cl.iter_responses(ev["typeform_id"].strip())))))
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Typeform : {exc}")
         st.caption("Une fois l'identifiant et le jeton en place, le moteur récupère seul les nouvelles inscriptions toutes les 15 minutes.")
     with st.expander("Importer un fichier CSV (Google Sheet) à la place", expanded=False):
         st.caption("Exportez le Google Sheet en CSV (Fichier → Télécharger → .csv). Une ligne = un inscrit seul, ou deux joueurs "

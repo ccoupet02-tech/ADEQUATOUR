@@ -152,3 +152,25 @@ def test_headers_are_read_from_all_rows_and_diagnosed():
     assert len(out) == 1 and out[0]["players"][0]["email"] == "a@x.fr" and not warns
     _, warns, _ = parse_signups([{"quel est votre identite": "x"}], load_settings())
     assert any(w.startswith("Questions/colonnes lues") and "identite" in w for w in warns)
+
+
+def test_contact_block_and_hidden_fields_are_read():
+    from padel.signups import typeform_diagnostic, typeform_rows
+    form = {"fields": [
+        {"id": "c", "type": "contact_info", "title": "Vos coordonnées", "properties": {"fields": [
+            {"id": "c1", "type": "short_text", "ref": "first_name", "title": ""},
+            {"id": "c2", "type": "short_text", "ref": "last_name", "title": ""},
+            {"id": "c3", "type": "email", "ref": "email", "title": ""},
+            {"id": "c4", "type": "phone_number", "ref": "phone_number", "title": ""}]}},
+        {"id": "q", "type": "short_text", "title": "Quels sont vos enjeux ?"}]}
+    resp = [{"submitted_at": "2026-10-01T08:00:00Z", "hidden": {"niveau": "Confirmé"},
+             "answers": [{"field": {"id": "c1"}, "type": "text", "text": "Ana"}, {"field": {"id": "c2"}, "type": "text", "text": "Diaz"},
+                         {"field": {"id": "c3"}, "type": "email", "email": "a@x.fr"},
+                         {"field": {"id": "c4"}, "type": "phone_number", "phone_number": "+33600000000"},
+                         {"field": {"id": "q"}, "type": "text", "text": "Réseau"}]}]
+    out, warns, _ = parse_signups(typeform_rows(form, resp), load_settings())
+    p = out[0]["players"][0]
+    assert (p["prenom"], p["nom"], p["email"], p["phone"], p["level"]) == ("Ana", "Diaz", "a@x.fr", "+33600000000", "Confirmé")
+    assert out[0]["stakes"] == "Réseau" and not warns
+    diag = "\n".join(typeform_diagnostic(form, resp))
+    assert "Ana" not in diag and "a@x.fr" not in diag and "first_name" in diag

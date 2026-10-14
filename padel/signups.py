@@ -104,17 +104,58 @@ def parse_signups(rows: list[dict], settings: Settings | None = None) -> tuple[l
     return out, warnings, mapping
 
 
+_REF_ALIASES = [("first", "prenom"), ("last", "nom"), ("phone", "telephone"), ("mobile", "telephone"),
+                ("email", "email"), ("mail", "email"), ("company", "entreprise")]
+_TYPE_ALIASES = {"email": "email", "phone_number": "telephone"}
+
+
+def _column_name(field: dict | None, answer: dict) -> str:
+    """Intitulé de la question ; à défaut, déduit de la référence ou du type de réponse (blocs « coordonnées »)."""
+    title = norm((field or {}).get("title", ""))
+    if title:
+        return title
+    ref = norm(((field or {}).get("ref") or answer.get("field", {}).get("ref") or "").replace("_", " "))
+    for key, alias in _REF_ALIASES:
+        if key in ref:
+            return alias
+    return _TYPE_ALIASES.get(answer.get("type"), ref)
+
+
 def typeform_rows(form: dict, responses: list[dict]) -> list[dict]:
-    """Réponses Typeform -> lignes {intitulé de la question normalisé: réponse}, au même format que l'export CSV."""
+    """Réponses Typeform -> lignes {intitulé de la question normalisé: réponse}, au même format que l'export CSV.
+    Les champs cachés (hidden) deviennent aussi des colonnes."""
     from .typeform import answer_value, flatten_fields
-    titles = {f["id"]: norm(f["title"]) for f in flatten_fields(form.get("fields"))}
+    by_id = {f["id"]: f for f in flatten_fields(form.get("fields"))}
     rows = []
     for r in sorted(responses, key=lambda x: x.get("submitted_at", "")):
         row = {"submitted_at": (r.get("submitted_at") or "").replace("T", " ").replace("Z", "")}
+        for k, v in (r.get("hidden") or {}).items():
+            if v not in (None, ""):
+                row[norm(k)] = str(v).strip()
         for a in r.get("answers", []):
-            t = titles.get(a["field"]["id"])
+            name = _column_name(by_id.get(a["field"]["id"]), a)
             v = answer_value(a)
-            if t and v not in (None, ""):
-                row[t] = str(v).strip()
+            if name and v not in (None, ""):
+                row[name] = str(v).strip()
         rows.append(row)
     return rows
+
+
+def typeform_diagnostic(form: dict, responses: list[dict]) -> list[str]:
+    """Description de la structure du formulaire SANS aucune donnée personnelle (titres, types, nombre de réponses)."""
+    from .typeform import flatten_fields
+    lines = [f"{len(responses)} réponse(s) complète(s) lue(s)."]
+    for f in flatten_fields(form.get("fields")):
+        lines.append(f"Question : « {f['title'] or '(sans titre)'} » · type {f['type']} · ref {f['ref']}")
+    hidden = sorted({k for r in responses for k in (r.get("hidden") or {})})
+    lines.append("Champs cachés : " + (", ".join(hidden) if hidden else "aucun"))
+    answered = {}
+    for r in responses:
+        for a in r.get("answers", []):
+            answered[a["field"]["id"]] = answered.get(a["field"]["id"], 0) + 1
+    known = {f["id"] for f in flatten_fields(form.get("fields"))}
+    unknown = [(i, n) for i, n in answered.items() if i not in known]
+    if unknown:
+        lines.append(f"{len(unknown)} réponse(s) à des questions absentes de la définition du formulaire (types : "
+                     + ", ".join(sorted({a.get('type', '?') for r in responses for a in r.get('answers', []) if a['field']['id'] not in known})) + ")")
+    return lines
