@@ -1,0 +1,13 @@
+Subject: Rappel - {{ brand }} {{ event.name }} le {{ event.date_fr }}
+
+Bonjour {{ p.prenom }},
+
+Nous n'avons pas encore reçu votre réponse pour le {{ brand }} de {{ event.name }} ({{ event.date_fr }}).
+{% if event.register_url %}
+Il reste quelques places, inscrivez-vous ici : {{ event.register_url }}
+{% else %}
+Merci de nous indiquer si vous serez des nôtres.
+{% endif %}
+Cordialement,
+
+{{ signature }}

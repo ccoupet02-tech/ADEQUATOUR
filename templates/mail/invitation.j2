@@ -1,0 +1,15 @@
+Subject: {{ brand }} {{ event.name }} - vous êtes invité(e) le {{ event.date_fr }}
+
+Bonjour {{ p.prenom }},
+
+Nous avons le plaisir de vous inviter au {{ brand }} de {{ event.name }}, le {{ event.date_fr }}{% if event.venue %}, à {{ event.venue }}{% endif %}.
+
+Au programme : un tournoi de padel convivial et une initiation pour les débutants.
+{% if event.register_url %}
+Pour vous inscrire (seul(e) ou avec un coéquipier), c'est ici : {{ event.register_url }}
+{% else %}
+Merci de nous répondre pour confirmer votre présence.
+{% endif %}
+À très vite sur les terrains !
+
+{{ signature }}

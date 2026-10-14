@@ -1,0 +1,12 @@
+Subject: Récap participants - {{ brand }} {{ event.name }} ({{ event.date_fr }})
+
+Bonjour,
+
+Voici le point sur les participants du {{ brand }} de {{ event.name }} le {{ event.date_fr }} :
+{{ total }} fiche(s) · {{ accepted }} acceptée(s)
+
+{% for line in lines %}- {{ line }}
+{% endfor %}
+Bien cordialement,
+
+{{ signature }}

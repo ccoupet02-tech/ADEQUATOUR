@@ -1,0 +1,13 @@
+Subject: Merci d'avoir participé au {{ brand }} {{ event.name }} !
+
+Bonjour {{ p.prenom }},
+
+Merci d'avoir participé au {{ brand }} de {{ event.name }} le {{ event.date_fr }} : ce fut un très bon moment grâce à vous.
+{% if event.photos_url %}
+Les photos sont disponibles ici : {{ event.photos_url }}
+{% endif %}{% if event.feedback_url %}
+Votre avis nous intéresse (2 minutes) : {{ event.feedback_url }}
+{% endif %}
+À bientôt pour une prochaine édition !
+
+{{ signature }}

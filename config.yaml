@@ -1,0 +1,161 @@
+# =============================================================================
+#  Configuration métier du pipeline Adéquat Padel Tour
+#  Les secrets (tokens) vont dans .env, jamais ici.
+# =============================================================================
+brand: "Adéquat Padel Tour"
+
+# ----------------------------------------------------------------------------
+#  Correspondance "clé logique" -> propriété Notion (nom exact + type).
+#  Vérifiée le 14/10/2026 sur votre espace. Si vous renommez une colonne dans
+#  Notion, changez-la ICI uniquement.
+# ----------------------------------------------------------------------------
+notion:
+  events:            # base "ADEQUAT PADEL TOUR" (Global view)
+    name:  {prop: "Name", type: title}
+    date:  {prop: "Date", type: date}
+    venue: {prop: "Lieu", type: rich_text}
+    dr:    {prop: "DR",   type: rich_text}
+  tasks:             # base "STANDARD PADEL TOUR" (to-do)
+    name:     {prop: "Tache",     type: title}
+    category: {prop: "Catégorie", type: select}
+    offset:   {prop: "Offset",    type: number}
+    status:   {prop: "Statut",    type: status}
+    event:    {prop: "Event",     type: relation}
+  participants:      # base "Participants"
+    prenom:        {prop: "Prenom",            type: title}
+    nom:           {prop: "Nom",               type: rich_text}
+    email:         {prop: "Email",             type: email}
+    telephone:     {prop: "Phone",             type: phone_number}
+    company:       {prop: "Entreprise",        type: rich_text}
+    team:          {prop: "Team",              type: rich_text}
+    poule:         {prop: "Poule",             type: select}   # options "Poule A", "Poule B"...
+    position:      {prop: "Position",          type: rich_text}
+    level:         {prop: "Level",             type: rich_text}
+    size:          {prop: "Size",              type: select}   # S, M, L, XL, XXL
+    type:          {prop: "Type",              type: select}   # Tournoi, Initiation, Cocktail
+    invite_status: {prop: "Statut invitation", type: status}
+    event:         {prop: "Tournoi",           type: relation}
+  staff:             # base "Staff <ville>" posée sur chaque page événement
+    name:      {prop: "Name",       type: title}
+    prenom:    {prop: "Prenom",     type: rich_text}
+    role:      {prop: "Role",       type: rich_text}
+    shirt:     {prop: "Shirt size", type: select}
+    hotel:     {prop: "Hotel",      type: select}
+    transport: {prop: "Transport",  type: select}
+    meal:      {prop: "Repas",      type: select}
+
+statuses:
+  not_started: "Not started"
+  in_progress: "In progress"
+  done: "Done"
+
+# Valeurs de « Statut invitation »
+invite_statuses:
+  not_invited: "Not started"   # valeur par défaut d'une fiche pas encore invitée
+  invited: "Pas de réponse"    # posée après l'envoi réel d'une invitation
+  accepted: "Acceptée"
+
+# Tailles réellement disponibles dans la colonne « Size » de Notion
+sizes: ["S", "M", "L", "XL", "XXL"]
+
+# ----------------------------------------------------------------------------
+#  Référentiel des tâches (extrait de votre to-do : 23 tâches types).
+#  offset = jours AVANT l'événement (négatif = après). Deadline = date - offset.
+#  "key" relie une tâche à une action automatique du pipeline.
+#  À trancher : « Demande devis » (60 j partout, 40 j à Lille) et
+#  « Commande t-shirts » (20 j partout, 15 j à Orléans).
+# ----------------------------------------------------------------------------
+task_templates:
+  - {name: "Demande devis",                         category: "Lieu",         offset: 60}
+  - {name: "Liste des clients Click",               category: "Participants", offset: 38}
+  - {name: "Réunion d’informations agences",        category: "Staff",        offset: 36}
+  - {name: "Confirmation inscription (powerautomate) avec formulaire typeform pour taille & niveau", category: "Mail", offset: 30}
+  - {name: "Invitation",                            category: "Mail",         offset: 27, key: invitation}
+  - {name: "Reserver transport",                    category: "Logistique",   offset: 21}
+  - {name: "Reserver hotel",                        category: "Staff",        offset: 21}
+  - {name: "Relance invitation",                    category: "Mail",         offset: 20, key: relance}
+  - {name: "Commande des t-shirt et goodies",       category: "Logistique",   offset: 20, key: tshirts}
+  - {name: "Rotations tournoi outil IA",            category: "Participants", offset: 14, key: rotations}
+  - {name: "Définir les poules",                    category: "Participants", offset: 14, key: poules}
+  - {name: "Reserver repas du midi",                category: "Lieu",         offset: 12}
+  - {name: "Réunion d’infos staff",                 category: "Staff",        offset: 10}
+  - {name: "Logistique signalétique",               category: "Logistique",   offset: 10}
+  - {name: "Imprimer étiquettes",                   category: "Impression",   offset: 10, key: etiquettes}
+  - {name: "Groupe Whatsapp",                       category: "Staff",        offset: 7}
+  - {name: "Points arbitres/Diplomes/Participants/Planning général/Terrain poules", category: "Impression", offset: 7, key: documents}
+  - {name: "Attribuer les rôles",                   category: "Staff",        offset: 7}
+  - {name: "Outlook calandar",                      category: "Mail",         offset: 5}
+  - {name: "Email recap des participants KAM",      category: "Mail",         offset: 5, key: recap_kam}
+  - {name: "Rappel staff",                          category: "Staff",        offset: 3}
+  - {name: "Retour/recap de l’événement",           category: "Mail",         offset: -1, key: retour}
+
+# ----------------------------------------------------------------------------
+#  Typeform -> participants
+# ----------------------------------------------------------------------------
+typeform:
+  # un formulaire par événement : NOM_EVENEMENT: identifiant du formulaire (fin de l'URL du formulaire)
+  forms: {}
+  #   DIJON: "AbC123xy"
+  # lien public d'inscription (utilisé dans les mails d'invitation)
+  links: {}
+  #   DIJON: "https://form.typeform.com/to/AbC123xy"
+  # forçage manuel d'une question : clé logique -> ref ou id du champ Typeform
+  refs: {}
+  #   level: "niveau_joueur"
+  # Reconnaissance automatique des questions par leur intitulé.
+  #   all_of : liste de groupes ; chaque groupe doit avoir au moins 1 mot présent dans l'intitulé
+  #   none   : mots interdits.   (comparaison sans accent, début de mot)
+  # Lancer `python -m padel typeform-fields --event DIJON` pour vérifier le résultat.
+  fields:
+    prenom:        {all_of: [[prenom]], none: [coequipier, partenaire, binome, equipier]}
+    nom:           {all_of: [[nom]], none: [prenom, nombre, entreprise, societe, equipe, coequipier, partenaire, binome, equipier]}
+    email:         {all_of: [[mail, email, courriel]], none: [coequipier, partenaire, binome, equipier]}
+    telephone:     {all_of: [[telephone, tel, portable, mobile, gsm]], none: [coequipier, partenaire, binome, equipier]}
+    company:       {all_of: [[entreprise, societe, agence]], none: [coequipier, partenaire, binome, equipier]}
+    level:         {all_of: [[niveau]], none: [coequipier, partenaire, binome, equipier]}
+    size:          {all_of: [[taille, shirt, tshirt]], none: [coequipier, partenaire, binome, equipier]}
+    type:          {all_of: [[tournoi, initiation, participation, formule]], none: [nom, prenom, mail, telephone]}
+    partner_name:  {all_of: [[coequipier, partenaire, binome, equipier], [nom, prenom]], none: [mail, email, telephone, niveau, taille]}
+    partner_email: {all_of: [[coequipier, partenaire, binome, equipier], [mail, email]]}
+
+# Normalisation des réponses libres
+levels:
+  # mots-clés (sans accent) -> valeur numérique, utilisée pour équilibrer les poules
+  keywords: [[debut, 1], [initi, 1], [novice, 1], [interm, 2], [moyen, 2], [confirm, 3], [avanc, 3], [expert, 4]]
+types:
+  tournoi: [tournoi, competition, compet]
+  initiation: [initiation, initier, decouverte]
+  cocktail: [cocktail, apero, diner]
+
+# ----------------------------------------------------------------------------
+#  Tournoi : poules, rotations, planning
+# ----------------------------------------------------------------------------
+tournament:
+  poule_size: 4            # équipes visées par poule (3 à 5 selon l'effectif)
+  courts: 4                # terrains utilisables en même temps
+  match_minutes: 20        # durée d'un match, changement compris
+  start_time: "09:30"
+  rest_slots: 1            # une équipe ne joue pas deux créneaux de suite (si possible)
+  include_types: ["Tournoi"]
+  include_untyped: true    # participants sans "Type" = tournoi
+  exclude_invite_status: ["Refusée", "Erreur mail"]
+
+logistics:
+  tshirt_margin: 0.10      # +10 % de t-shirts commandés par taille
+
+# ----------------------------------------------------------------------------
+#  Mails (jamais envoyés sans --send)
+# ----------------------------------------------------------------------------
+mail:
+  from_name: "Adéquat Padel Tour"
+  signature: "L'équipe Adéquat Padel Tour"
+  kam_recipients: []              # ex: ["kam1@exemple.fr", "kam2@exemple.fr"]
+  relance_statuses: ["Pas de réponse"]
+  feedback_url: ""
+  photos_url: ""
+
+digest:
+  horizon_days: 90     # événements à venir pris en compte (doit dépasser le plus grand offset : 60 j)
+  grace_days: 14       # événements passés encore suivis (retour/recap...)
+  soon_days: 7         # "à faire dans les X jours"
+  max_items: 10
