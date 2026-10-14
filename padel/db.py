@@ -200,6 +200,13 @@ def make_engine(url: str | None = None) -> Engine:
     return create_engine(final, connect_args=connect_args, pool_pre_ping=True, future=True)
 
 
+def schema_signature() -> str:
+    """Empreinte des tables/colonnes du code : change dès qu'une colonne est ajoutée (sert de clé de cache à l'appli)."""
+    import hashlib
+    raw = ";".join(f"{t.name}:{','.join(c.name for c in t.columns)}" for t in metadata.sorted_tables)
+    return hashlib.sha1(raw.encode()).hexdigest()[:10]
+
+
 def init_db(engine: Engine) -> None:
     metadata.create_all(engine)
     ensure_columns(engine)

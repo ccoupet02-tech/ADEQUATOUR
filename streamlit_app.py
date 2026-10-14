@@ -57,10 +57,15 @@ def check_password() -> bool:
 
 
 @st.cache_resource(show_spinner="Connexion à la base…")
-def get_engine():
+def _engine_for(schema: str):  # `schema` change => la migration est rejouée même si le processus n'a pas redémarré
     engine = make_engine()
     init_db(engine)
     return engine
+
+
+def get_engine():
+    from padel.db import schema_signature
+    return _engine_for(schema_signature())
 
 
 @st.cache_resource

@@ -279,3 +279,17 @@ def test_failed_workflow_leaves_no_partial_writes(env, monkeypatch):
     assert res.errors == 1
     with e.connect() as cx:
         assert cx.execute(select(communications)).first() is None
+
+
+def test_old_database_gets_missing_columns(tmp_path):
+    """Base créée avant l'ajout de colonnes (events.report, registrations.stakes) : la migration les ajoute."""
+    from sqlalchemy import create_engine, inspect, text
+    from padel.db import init_db, schema_signature
+    eng = create_engine(f"sqlite:///{tmp_path / 'old.db'}")
+    with eng.begin() as cx:
+        cx.execute(text("CREATE TABLE events (id INTEGER PRIMARY KEY, name VARCHAR(120) NOT NULL, kind VARCHAR(30))"))
+        cx.execute(text("CREATE TABLE registrations (id INTEGER PRIMARY KEY, event_id INTEGER, person_id INTEGER)"))
+    init_db(eng)
+    cols = {c["name"] for c in inspect(eng).get_columns("events")}
+    assert "report" in cols and "stakes" in {c["name"] for c in inspect(eng).get_columns("registrations")}
+    assert len(schema_signature()) == 10
