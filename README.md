@@ -39,6 +39,14 @@ python -m padel audit
 python -m padel typeform-fields --event DIJON   # quelles questions sont reconnues ?
 ```
 
+## Interface web (Streamlit, sans rien installer)
+
+`streamlit_app.py` est une page web protégée par mot de passe qui appelle les mêmes commandes. La case « Écrire dans Notion » est décochée par défaut (simulation) et **aucun mail n'est jamais envoyé depuis l'interface** (aperçus `.eml` à télécharger).
+
+1. Allez sur share.streamlit.io, connectez GitHub, puis **New app** : dépôt `ccoupet02-tech/ADEQUATOUR`, branche `main`, fichier `streamlit_app.py`.
+2. **Advanced settings → Secrets** : collez le contenu de `.streamlit/secrets.toml.example` en remplaçant les valeurs (mot de passe, token Notion).
+3. Mettez l'application en **privée** (Share → réservée aux personnes invitées) en plus du mot de passe.
+
 ## Utilisation courante
 
 ```bash
