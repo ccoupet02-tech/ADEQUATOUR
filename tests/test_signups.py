@@ -142,3 +142,13 @@ def test_engine_syncs_typeform_only_with_a_token(env, monkeypatch):
     with eng.connect() as cx:
         assert len(store.list_registrations(cx)) == 3
     assert res.errors == 0
+
+
+def test_headers_are_read_from_all_rows_and_diagnosed():
+    """Une 1re réponse vide ne doit pas masquer les questions ; si rien n'est reconnu, les intitulés sont listés."""
+    rows = [{"submitted_at": "2026-10-01 08:00:00"},
+            {"submitted_at": "2026-10-02 08:00:00", "prenom": "Ana", "nom": "Diaz", "votre e-mail": "a@x.fr"}]
+    out, warns, _ = parse_signups(rows, load_settings())
+    assert len(out) == 1 and out[0]["players"][0]["email"] == "a@x.fr" and not warns
+    _, warns, _ = parse_signups([{"quel est votre identite": "x"}], load_settings())
+    assert any(w.startswith("Questions/colonnes lues") and "identite" in w for w in warns)

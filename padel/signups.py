@@ -51,10 +51,16 @@ def parse_signups(rows: list[dict], settings: Settings | None = None) -> tuple[l
     warnings: list[str] = []
     if not rows:
         return [], ["Le fichier ne contient aucune ligne."], {}
-    mapping = map_headers(list(rows[0].keys()), matchers)
-    for needed, label in (("prenom", "prénom"), ("nom", "nom"), ("email", "e-mail")):
-        if not mapping.get(needed):
-            warnings.append(f"Colonne « {label} » non reconnue : vérifiez l'intitulé dans le fichier.")
+    headers: list[str] = []
+    for row in rows:                      # toutes les lignes : une réponse peut omettre une question facultative
+        headers += [k for k in row if k not in headers]
+    mapping = map_headers(headers, matchers)
+    missing = [label for needed, label in (("prenom", "prénom"), ("nom", "nom"), ("email", "e-mail"))
+               if not mapping.get(needed)]
+    for label in missing:
+        warnings.append(f"Colonne « {label} » non reconnue : vérifiez l'intitulé dans le fichier.")
+    if missing:
+        warnings.append("Questions/colonnes lues : " + " | ".join(headers[:20]) + (" …" if len(headers) > 20 else ""))
     out = []
     for i, row in enumerate(rows, start=2):
         g = lambda k, join=False: _val(row, mapping.get(k, []), join or k in MULTI)  # noqa: E731
