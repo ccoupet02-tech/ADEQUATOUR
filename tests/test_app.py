@@ -9,7 +9,8 @@ import streamlit as st  # noqa: E402
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 APP = str(Path(__file__).parent.parent / "streamlit_app.py")
-PAGES = ["Accueil", "Événements", "Participants", "Automatisations", "À valider", "Données"]
+PAGES = ["Accueil", "Événements", "Participants", "Automatisations", "À valider", "Historique des actions",
+         "Erreurs et synchronisations", "Données", "Paramètres et connexions"]
 
 
 @pytest.fixture()
@@ -27,7 +28,8 @@ def app(monkeypatch, tmp_path):
 
 
 def goto(at, page):
-    at.sidebar.radio[0].set_value(page).run()
+    """page : nom d'une page, ou « event:<id> » pour la fiche d'un événement."""
+    at.sidebar.radio[0].set_value(page if page.startswith("event:") else f"page:{page}").run()
     assert not at.exception, f"{page}: {at.exception}"
     return at
 
@@ -59,14 +61,25 @@ def test_seed_then_pages_show_data(app):
     seed = next(b for b in app.button if "14 événements" in b.label)
     seed.click().run()
     assert not app.exception, app.exception
-    assert any("14 créé" in s.value for s in app.success)
+    assert any("14 créé" in s.value for s in app.success)               # message conservé après le rechargement
     goto(app, "Accueil")
     kpi = {m.label: m.value for m in app.metric}
     assert int(kpi["Événements à venir"]) >= 8
     for page in PAGES:
         goto(app, page)
-    goto(app, "Événements")
-    assert len(app.tabs) == 7
+    # le menu contient les événements de la base, construits dynamiquement
+    labels = list(app.sidebar.radio[0].options)
+    assert sum("↳" in o for o in labels) == 14 and any("BORDEAUX" in o for o in labels)
+    from padel import store
+    from padel.db import make_engine
+    with make_engine().connect() as cx:
+        bordeaux = store.get_event(cx, "BORDEAUX")["id"]
+    goto(app, f"event:{bordeaux}")
+    assert not app.exception, app.exception
+    assert len(app.tabs) == 8
+    assert [t.label for t in app.tabs] == ["Vue d'ensemble", "Participants et inscriptions", "Staff et intervenants",
+                                           "Logistique", "Communications", "Automatisations", "Historique",
+                                           "Bilan et suivi post-événement"]
 
 
 def test_data_survives_a_new_session(app):
@@ -99,3 +112,20 @@ def test_create_event_form_persists_across_rerun(app):
     with make_engine().connect() as cx:
         ev = store.get_event(cx, "MARSEILLE")
         assert ev is not None and len(store.list_tasks(cx, ev["id"])) == 22
+
+
+def test_every_event_page_renders_and_settings_are_honest(app):
+    goto(app, "Données")
+    next(b for b in app.button if "14 événements" in b.label).click().run()
+    from padel import store
+    from padel.db import make_engine
+    with make_engine().connect() as cx:
+        ids = [e["id"] for e in store.list_events(cx)]
+    for eid in ids:
+        goto(app, f"event:{eid}")
+    goto(app, "Paramètres et connexions")
+    text = " ".join(m.value for m in app.markdown)
+    assert "Outlook" in text and "Teams" in text
+    outlook = next(m.value for m in app.markdown if "Outlook" in m.value)
+    assert "OK (vérifié)" not in outlook                       # jamais « OK » pour un connecteur inexistant
+    assert any("non développé" in c.value for c in app.caption)

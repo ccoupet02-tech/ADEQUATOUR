@@ -21,21 +21,25 @@ uniquement pour reprendre les données.
 
 | Domaine | État |
 |---|---|
-| Base centrale (événements, personnes, inscriptions, tâches, staff, communications, journal, validations) | ✅ terminé |
-| Création d'un événement depuis le modèle (22 tâches, échéances calculées) | ✅ terminé |
-| Import des exports CSV de Notion, rejouable, dédoublonnage « Tâche (1) » | ✅ terminé |
-| Dashboard : accueil, événements, participants, automatisations, à valider, données, sauvegarde ZIP | ✅ terminé |
-| Moteur : aperçus d'invitations et de relances, anti-doublons, relance annulée si réponse, journal | ✅ terminé (mode aperçu) |
-| Poules, planning, PDF (planning, poules, arbitres, diplômes, étiquettes), t-shirts et repas | ✅ branché sur la base |
-| Envoi réel des mails | ⏳ non branché : marquage « envoyé » manuel en attendant Outlook |
-| Lecture des e-mails et réponses (Outlook / Microsoft Graph) | ⏳ dépend des autorisations de votre DSI |
+| Base centrale (événements, personnes, inscriptions, tâches, staff, communications, journal, validations, exécutions) | ✅ terminé |
+| Menu dynamique : les événements viennent de la base, aucun nom codé en dur | ✅ terminé |
+| Fiche événement en 8 sections (vue d'ensemble, participants, staff, logistique, communications, automatisations, historique, bilan) | ✅ terminé |
+| Accueil : événements proches, attention requise, e-mails en attente, actions du jour, erreurs, décisions | ✅ terminé |
+| Historique des actions, Erreurs et synchronisations, Paramètres et connexions (états réels) | ✅ terminé |
+| Moteur de workflow : exécutions tracées, erreurs isolées par événement, reprise, passage en « À valider » après 3 échecs, activation par workflow | ✅ terminé (mode aperçu) |
+| Invitations et relances : aperçus, anti-doublons, relance annulée dès qu'une réponse est saisie | ✅ terminé (mode aperçu) |
+| Import des exports CSV de Notion, rejouable | ✅ terminé |
+| Poules, planning, PDF, t-shirts et repas | ✅ branché sur la base |
+| Envoi réel des mails | ⏳ non branché : marquage « envoyé » manuel |
+| Lecture des e-mails et des réponses (Outlook / Microsoft Graph) | ⏳ dépend des autorisations de votre DSI |
 | Messages Teams | ⏳ idem |
-| Typeform (inscriptions en direct) | ⏳ code existant (`padel/typeform.py`) à rebrancher sur la base |
+| Typeform en direct | ⏳ code existant (`padel/typeform.py`) à rebrancher sur la base |
 | Classification des réponses par Claude | ⏳ après Outlook |
-| Comptes séparés par utilisateur | ❌ un seul mot de passe pour l'instant |
+| Comptes séparés par utilisateur | ❌ un seul mot de passe |
 
 ## Garde-fous
 
+- Aucune connexion n'est affichée « OK » sans un appel réel de vérification ; Outlook, Teams et Claude sont signalés « non fonctionnels ».
 - Le moteur **n'envoie rien** : il prépare des aperçus relus dans « Automatisations ».
 - Une même communication n'est jamais préparée deux fois (clé d'idempotence en base, atomique).
 - `python -m padel.engine --dry-run` montre ce qui serait préparé sans rien écrire.

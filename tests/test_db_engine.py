@@ -166,3 +166,116 @@ def test_import_staff(env):
         rep = importer.import_staff(cx, csv_, "PERIGUEUX")
         assert (rep.created, rep.skipped) == (1, 2)
         assert store.list_staff(cx, store.get_event(cx, "PERIGUEUX")["id"])[0]["hotel"] == "Ibis"
+
+
+# ----------------------------------------------------------------------------- fiabilité du moteur
+def _two_events(e, s):
+    with e.begin() as cx:
+        ids = []
+        for name in ("AAA", "BBB"):
+            eid, _ = store.upsert_event(cx, name, date=date(2026, 10, 30), venue="Club")
+            pid, _ = store.upsert_person(cx, prenom=name.title(), nom="Joueur", email=f"{name.lower()}@x.fr")
+            store.upsert_registration(cx, eid, pid, type="Tournoi")
+            ids.append(eid)
+    return ids
+
+
+def test_error_on_one_event_does_not_block_the_others_and_is_retried(env, monkeypatch):
+    e, s = env
+    ids = _two_events(e, s)
+    real = eng.render
+
+    def flaky(name, **ctx):
+        if ctx["event"]["name"] == "AAA":
+            raise RuntimeError("modèle cassé")
+        return real(name, **ctx)
+
+    monkeypatch.setattr(eng, "render", flaky)
+    first = eng.run(e, s, TODAY)
+    assert first.errors == 1 and first.invitations == 1          # BBB est passé malgré l'erreur sur AAA
+    with e.connect() as cx:
+        runs = store.list_runs(cx, status="erreur")
+        assert len(runs) == 1 and runs[0]["event_name"] == "AAA" and "modèle cassé" in runs[0]["error"]
+        assert cx.execute(select(communications)).mappings().all()[0]["to_addr"] == "bbb@x.fr"
+    monkeypatch.setattr(eng, "render", real)                      # reprise : la panne est corrigée
+    second = eng.run(e, s, TODAY)
+    assert second.errors == 0 and second.invitations == 1 and second.skipped_existing == 1
+    with e.connect() as cx:
+        assert store.latest_run_status(cx, "invitations", ids[0]) == "ok"
+        assert store.consecutive_failures(cx, "invitations", ids[0]) == 0
+
+
+def test_three_consecutive_failures_raise_a_validation(env, monkeypatch):
+    e, s = env
+    _two_events(e, s)
+    monkeypatch.setattr(eng, "render", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("panne")))
+    for _ in range(3):
+        eng.run(e, s, TODAY)
+    with e.connect() as cx:
+        from padel.db import pending
+        rows = cx.execute(select(pending).where(pending.c.kind == "automatisation_en_echec")).mappings().all()
+        assert len(rows) == 2 and all("échec répété" in r["title"] for r in rows)   # une par événement
+        assert max(r["attempt"] for r in store.list_runs(cx)) == 3
+
+
+def test_disabled_automation_does_nothing(env):
+    e, s = env
+    _setup_invites(e, s)
+    with e.begin() as cx:
+        store.set_automation_enabled(cx, "invitations", False)
+    assert eng.run(e, s, TODAY).invitations == 0
+    with e.begin() as cx:
+        store.set_automation_enabled(cx, "invitations", True)
+    assert eng.run(e, s, TODAY).invitations == 1
+
+
+def test_event_kpis(env):
+    e, s = env
+    eid = _setup_invites(e, s)
+    eng.run(e, s, TODAY)
+    with e.begin() as cx:
+        importer.seed_events(cx, s)
+        ev = store.get_event(cx, eid)
+        store.ensure_tasks(cx, eid, s.templates())
+        k = store.event_kpis(cx, ev, TODAY)
+        assert k["registrations"] == 3 and k["to_invite"] == 3 and k["emails_to_handle"] == 1 and k["flagged"] == 1
+        assert k["tasks_total"] == 22 and k["tasks_late"] > 0 and 0 <= k["progress"] < 1
+        assert len(k["next_actions"]) <= 5
+
+
+def test_light_migration_adds_missing_column(tmp_path):
+    from sqlalchemy import text
+    from padel.db import ensure_columns
+    url = f"sqlite:///{tmp_path / 'old.db'}"
+    e = make_engine(url)
+    with e.begin() as cx:
+        cx.execute(text("CREATE TABLE events (id INTEGER PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE)"))
+    init_db(e)
+    with e.connect() as cx:
+        cols = {r[1] for r in cx.execute(text("PRAGMA table_info(events)"))}
+    assert {"report", "courts", "date"} <= cols
+    assert ensure_columns(e) == []                                  # idempotent
+
+
+def test_failed_workflow_leaves_no_partial_writes(env, monkeypatch):
+    """Si le workflow échoue au milieu, ce qu'il a déjà écrit est annulé (rien de moitié préparé)."""
+    e, s = env
+    with e.begin() as cx:
+        eid, _ = store.upsert_event(cx, "AAA", date=date(2026, 10, 30), venue="Club")
+        for n in ("Ana", "Bob"):
+            pid, _ = store.upsert_person(cx, prenom=n, nom="X", email=f"{n.lower()}@x.fr")
+            store.upsert_registration(cx, eid, pid, type="Tournoi")
+    real = eng.render
+    calls = []
+
+    def second_fails(name, **ctx):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("boum")
+        return real(name, **ctx)
+
+    monkeypatch.setattr(eng, "render", second_fails)
+    res = eng.run(e, s, TODAY)
+    assert res.errors == 1
+    with e.connect() as cx:
+        assert cx.execute(select(communications)).first() is None

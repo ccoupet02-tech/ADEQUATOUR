@@ -33,6 +33,7 @@ events = Table(
     Column("contact_phone", String(60), default=""),
     Column("contact_email", String(200), default=""),
     Column("notes", Text, default=""),
+    Column("report", Text, default=""),                # bilan post-événement
     Column("created_at", DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)),
 )
 
@@ -134,7 +135,41 @@ pending = Table(
     Column("resolved_at", DateTime),
 )
 
-TABLES = [events, people, registrations, tasks, staff, communications, action_log, pending]
+automations = Table(
+    "automations", metadata,
+    Column("key", String(60), primary_key=True),
+    Column("label", String(200), nullable=False),
+    Column("enabled", Integer, default=1),
+    Column("mode", String(10), default="preview"),     # preview : prépare des aperçus ; auto : envoi (non disponible)
+)
+
+workflow_runs = Table(
+    "workflow_runs", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("workflow", String(60), nullable=False),
+    Column("event_id", Integer, ForeignKey("events.id", ondelete="CASCADE")),
+    Column("trigger", String(60), default="planifie"),  # planifie, manuel
+    Column("status", String(12), nullable=False),       # ok, rien, erreur, simulation
+    Column("started_at", DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)),
+    Column("finished_at", DateTime),
+    Column("prepared", Integer, default=0),
+    Column("flagged", Integer, default=0),
+    Column("attempt", Integer, default=1),             # n-ième échec consécutif pour ce workflow et cet événement
+    Column("error", Text, default=""),
+    Column("detail", Text, default=""),
+)
+
+sync_state = Table(
+    "sync_state", metadata,
+    Column("connector", String(40), primary_key=True),
+    Column("status", String(20), default="inconnu"),   # ok, erreur, non_configure, inconnu
+    Column("last_ok_at", DateTime),
+    Column("last_error_at", DateTime),
+    Column("last_error", Text, default=""),
+)
+
+TABLES = [events, people, registrations, tasks, staff, communications, action_log, pending, automations,
+          workflow_runs, sync_state]
 
 
 def normalize_url(url: str) -> tuple[str, dict]:
@@ -165,6 +200,26 @@ def make_engine(url: str | None = None) -> Engine:
 
 def init_db(engine: Engine) -> None:
     metadata.create_all(engine)
+    ensure_columns(engine)
+
+
+def ensure_columns(engine: Engine) -> list[str]:
+    """Migration légère : ajoute les colonnes apparues après la création initiale d'une table (ne supprime rien)."""
+    from sqlalchemy import inspect, text
+    added: list[str] = []
+    insp = inspect(engine)
+    with engine.begin() as cx:
+        for table in metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in have:
+                    continue
+                ddl = col.type.compile(dialect=engine.dialect)
+                cx.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}'))
+                added.append(f"{table.name}.{col.name}")
+    return added
 
 
 def describe(engine: Engine) -> str:

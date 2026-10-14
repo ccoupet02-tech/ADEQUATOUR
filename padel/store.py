@@ -5,7 +5,8 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import and_, delete, func, insert, select, update
 
-from .db import action_log, communications, events, pending, people, registrations, staff, tasks
+from .db import (action_log, automations, communications, events, pending, people, registrations, staff, sync_state,
+                 tasks, workflow_runs)
 from .util import base_task_name, norm
 
 TASK_STATUS = {"todo": "À faire", "doing": "En cours", "done": "Terminée"}
@@ -292,4 +293,128 @@ def kpis(cx, today: date, soon_days: int = 7) -> dict:
         "actions_today": cx.execute(select(func.count()).select_from(action_log).where(
             action_log.c.ts >= midnight)).scalar() or 0,
         "last_run": cx.execute(select(func.max(action_log.c.ts)).where(action_log.c.action == "engine_run")).scalar(),
+    }
+
+
+# ----------------------------------------------------------------------------- automatisations et exécutions
+DEFAULT_AUTOMATIONS = [
+    ("invitations", "Préparer les invitations dues (aperçu)"),
+    ("relances", "Préparer les relances sans réponse (aperçu)"),
+]
+MAX_ATTEMPTS = 3
+
+
+def ensure_automations(cx) -> None:
+    have = {r[0] for r in cx.execute(select(automations.c.key))}
+    for key, label in DEFAULT_AUTOMATIONS:
+        if key not in have:
+            cx.execute(insert(automations).values(key=key, label=label, enabled=1, mode="preview"))
+
+
+def list_automations(cx) -> list[dict]:
+    ensure_automations(cx)
+    return [dict(r) for r in cx.execute(select(automations).order_by(automations.c.key)).mappings()]
+
+
+def is_enabled(cx, key: str) -> bool:
+    row = cx.execute(select(automations.c.enabled).where(automations.c.key == key)).first()
+    return True if row is None else bool(row[0])
+
+
+def set_automation_enabled(cx, key: str, enabled: bool, actor: str = "utilisateur") -> None:
+    ensure_automations(cx)
+    cx.execute(update(automations).where(automations.c.key == key).values(enabled=1 if enabled else 0))
+    log(cx, "automation_enabled" if enabled else "automation_disabled", None, key, actor)
+
+
+def consecutive_failures(cx, workflow: str, event_id: int) -> int:
+    rows = cx.execute(select(workflow_runs.c.status).where(and_(
+        workflow_runs.c.workflow == workflow, workflow_runs.c.event_id == event_id,
+        workflow_runs.c.status != "simulation")).order_by(workflow_runs.c.id.desc()).limit(MAX_ATTEMPTS + 2)).all()
+    n = 0
+    for (status,) in rows:
+        if status != "erreur":
+            break
+        n += 1
+    return n
+
+
+def record_run(cx, workflow: str, event_id: int | None, status: str, prepared: int = 0, flagged: int = 0,
+               error: str = "", detail: str = "", trigger: str = "planifie", started_at: datetime | None = None) -> int:
+    attempt = 1
+    if status == "erreur" and event_id is not None:
+        attempt = consecutive_failures(cx, workflow, event_id) + 1
+    res = cx.execute(insert(workflow_runs).values(
+        workflow=workflow, event_id=event_id, trigger=trigger, status=status, started_at=started_at or now(),
+        finished_at=now(), prepared=prepared, flagged=flagged, attempt=attempt, error=error[:2000], detail=detail))
+    if status == "erreur" and attempt >= MAX_ATTEMPTS and event_id is not None:
+        add_pending(cx, f"wf-fail:{workflow}:{event_id}", "automatisation_en_echec",
+                    f"Automatisation « {workflow} » en échec répété ({attempt} fois)",
+                    f"Dernière erreur : {error[:300]}", event_id)
+    return int(res.inserted_primary_key[0])
+
+
+def list_runs(cx, event_id: int | None = None, status: str | None = None, limit: int = 200) -> list[dict]:
+    q = select(workflow_runs, events.c.name.label("event_name")).join(
+        events, events.c.id == workflow_runs.c.event_id, isouter=True)
+    if event_id is not None:
+        q = q.where(workflow_runs.c.event_id == event_id)
+    if status:
+        q = q.where(workflow_runs.c.status == status)
+    return [dict(r) for r in cx.execute(q.order_by(workflow_runs.c.id.desc()).limit(limit)).mappings()]
+
+
+def latest_run_status(cx, workflow: str, event_id: int) -> str | None:
+    row = cx.execute(select(workflow_runs.c.status).where(and_(
+        workflow_runs.c.workflow == workflow, workflow_runs.c.event_id == event_id,
+        workflow_runs.c.status != "simulation")).order_by(workflow_runs.c.id.desc()).limit(1)).first()
+    return row[0] if row else None
+
+
+def set_sync(cx, connector: str, status: str, error: str = "") -> None:
+    row = cx.execute(select(sync_state).where(sync_state.c.connector == connector)).first()
+    vals = {"status": status}
+    if status == "ok":
+        vals["last_ok_at"] = now()
+    if status == "erreur":
+        vals.update(last_error_at=now(), last_error=error[:1000])
+    if row:
+        cx.execute(update(sync_state).where(sync_state.c.connector == connector).values(**vals))
+    else:
+        cx.execute(insert(sync_state).values(connector=connector, **vals))
+
+
+def get_sync(cx) -> dict[str, dict]:
+    return {r["connector"]: dict(r) for r in cx.execute(select(sync_state)).mappings()}
+
+
+# ----------------------------------------------------------------------------- indicateurs par événement
+def event_kpis(cx, event: dict, today: date, soon_days: int = 7) -> dict:
+    regs = list_registrations(cx, event["id"])
+    tl = list_tasks(cx, event["id"])
+    cls = [classify(t["status"], t["deadline"], today, soon_days) for t in tl]
+    upcoming = sorted([t for t, c in zip(tl, cls) if c in ("soon", "later") and t["deadline"]], key=lambda t: t["deadline"])
+    runs = list_runs(cx, event["id"], limit=500)
+    failing = sorted({r["workflow"] for r in runs if r["status"] == "erreur"
+                      and latest_run_status(cx, r["workflow"], event["id"]) == "erreur"})
+    to_handle = cx.execute(select(func.count()).select_from(communications).where(and_(
+        communications.c.event_id == event["id"], communications.c.status.in_(("preview", "approved"))))).scalar() or 0
+    flagged = cx.execute(select(func.count()).select_from(pending).where(and_(
+        pending.c.event_id == event["id"], pending.c.status.in_(("open", "postponed"))))).scalar() or 0
+    n = len(regs)
+    return {
+        "registrations": n,
+        "accepted": sum(r["invite_status"] == "accepte" for r in regs),
+        "refused": sum(r["invite_status"] == "refuse" for r in regs),
+        "no_answer": sum(r["invite_status"] == "invite" for r in regs),
+        "to_invite": sum(r["invite_status"] == "a_inviter" for r in regs),
+        "emails_to_handle": to_handle,
+        "tasks_late": cls.count("late"),
+        "tasks_soon": cls.count("soon"),
+        "tasks_done": cls.count("done"),
+        "tasks_total": len(tl),
+        "progress": (cls.count("done") / len(tl)) if tl else 0.0,
+        "next_actions": upcoming[:5],
+        "failing": failing,
+        "flagged": flagged,
     }

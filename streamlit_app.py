@@ -3,6 +3,7 @@
 Secrets (Streamlit Cloud > Settings > Secrets, jamais dans le code) : APP_PASSWORD, DATABASE_URL.
 Phase 1 : le moteur prépare des aperçus de communications et signale ce qui demande une décision ; aucun envoi
 automatique n'est branché (Outlook/Teams viendront ensuite, après validation des autorisations).
+Aucune connexion n'est affichée « OK » sans avoir été vérifiée par un appel réel (voir padel/connections.py).
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ except Exception:  # pas de secrets.toml en local
 
 from sqlalchemy import select  # noqa: E402
 
-from padel import engine as automation, importer, store  # noqa: E402
+from padel import connections, engine as automation, importer, store  # noqa: E402
 from padel.config import load_settings  # noqa: E402
 from padel.db import (action_log, communications, describe, events as t_events, init_db, make_engine,  # noqa: E402
                       pending, people, registrations, staff as t_staff, tasks as t_tasks)
@@ -75,7 +76,11 @@ def progress_of(task_list: list[dict]) -> float:
     return (sum(t["status"] == "done" for t in task_list) / len(task_list)) if task_list else 0.0
 
 
-# ----------------------------------------------------------------------------- pages
+
+def flash(message: str, level: str = "success") -> None:
+    """Message affiché après le rechargement de la page (st.rerun efface ce qui a été écrit avant)."""
+    st.session_state.setdefault("flash", []).append((level, message))
+
 
 def rerun(cx):
     """Valide les écritures puis relance la page (st.rerun interrompt le script : sans commit, tout serait annulé)."""
@@ -83,63 +88,233 @@ def rerun(cx):
     st.rerun()
 
 
+
+
+def _since_midnight():
+    from datetime import datetime
+    return datetime.combine(TODAY, datetime.min.time())
+
+
 def page_home(cx):
-    k = store.kpis(cx, TODAY, get_settings().get("digest", "soon_days", default=7))
-    c = st.columns(6)
-    c[0].metric("Événements à venir", k["events_upcoming"])
-    c[1].metric("Tâches en retard", k["tasks_late"])
-    c[2].metric("À faire sous 7 jours", k["tasks_soon"])
-    c[3].metric("À valider", k["pending_open"])
-    c[4].metric("Aperçus en attente", k["previews"])
-    c[5].metric("Inscrits / acceptés", f"{k['registrations']} / {k['accepted']}")
-    st.caption(f"Dernier passage du moteur : {fmt_dt(k['last_run']) or 'jamais'} · actions aujourd'hui : {k['actions_today']}")
-
-    st.subheader("À traiter par moi")
-    items = []
-    for p in cx.execute(select(pending).where(pending.c.status == "open")).mappings():
-        items.append({"Type": "Décision", "Sujet": p["title"], "Pourquoi": p["reason"]})
     soon = get_settings().get("digest", "soon_days", default=7)
-    late = [t for t in store.list_tasks(cx) if t["event_date"] and t["event_date"] >= TODAY
-            and store.classify(t["status"], t["deadline"], TODAY, soon) == "late"]
-    by_event: dict[str, list[dict]] = {}
-    for t in late:
-        by_event.setdefault(t["event_name"], []).append(t)
-    for name, ts in by_event.items():
-        oldest = min(ts, key=lambda t: t["deadline"])
-        items.append({"Type": "Retard", "Sujet": f"{name} : {len(ts)} tâche(s) en retard",
-                      "Pourquoi": f"La plus ancienne : {oldest['name']} (échéance {fr_date(oldest['deadline'])}, "
-                                  f"{(TODAY - oldest['deadline']).days} j)"})
-    if items:
-        st.dataframe(pd.DataFrame(items), hide_index=True)
+    evs = store.list_events(cx)
+    kp = {e["id"]: store.event_kpis(cx, e, TODAY, soon) for e in evs}
+    upcoming = [e for e in evs if e["date"] and e["date"] >= TODAY and e["status"] not in ("termine", "annule")]
+    open_pending = cx.execute(select(pending).where(pending.c.status == "open").order_by(pending.c.id)).mappings().all()
+    previews = cx.execute(select(communications, t_events.c.name.label("event_name")).join(
+        t_events, t_events.c.id == communications.c.event_id, isouter=True).where(
+        communications.c.status.in_(("preview", "approved"))).order_by(communications.c.id.desc())).mappings().all()
+    failing = [r for r in store.list_runs(cx, status="erreur", limit=300)
+               if store.latest_run_status(cx, r["workflow"], r["event_id"]) == "erreur"]
+    failing = list({(r["workflow"], r["event_id"]): r for r in failing}.values())
+    today_actions = cx.execute(select(action_log).where(action_log.c.ts >= _since_midnight())
+                               .order_by(action_log.c.id.desc())).mappings().all()
+    auto_today = [a for a in today_actions if a["actor"] == "systeme"]
+    last_run = cx.execute(select(action_log.c.ts).where(action_log.c.action == "engine_run")
+                          .order_by(action_log.c.id.desc()).limit(1)).scalar()
+
+    c = st.columns(6)
+    c[0].metric("Événements à venir", len(upcoming))
+    c[1].metric("À valider", len(open_pending))
+    c[2].metric("E-mails à traiter", len(previews))
+    c[3].metric("Automatisations en erreur", len(failing))
+    c[4].metric("Actions automatiques aujourd'hui", len(auto_today))
+    c[5].metric("Tâches en retard", sum(k["tasks_late"] for e in upcoming for k in [kp[e["id"]]]))
+    st.caption(f"Dernier passage du moteur : {fmt_dt(last_run) or 'jamais'}")
+
+    st.subheader("Quels événements arrivent bientôt ?")
+    if upcoming:
+        st.dataframe(pd.DataFrame([{
+            "Événement": e["name"], "Date": e["date"], "J-": (e["date"] - TODAY).days, "Lieu": e["venue"],
+            "Préparation": kp[e["id"]]["progress"], "Inscrits": kp[e["id"]]["registrations"],
+            "Confirmés": kp[e["id"]]["accepted"]} for e in upcoming[:8]]), hide_index=True, column_config={
+            "Préparation": st.column_config.ProgressColumn("Préparation", min_value=0.0, max_value=1.0, format="percent"),
+            "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY")})
     else:
-        st.success("Rien à traiter pour le moment.")
+        st.info("Aucun événement à venir. Chargez le jeu de départ dans « Données » ou créez un événement.")
 
-    st.subheader("Événements")
-    rows = []
-    for e in store.list_events(cx):
-        tl = store.list_tasks(cx, e["id"])
-        regs = store.list_registrations(cx, e["id"])
-        due = [t for t in tl if t["status"] != "done" and t["deadline"] and t["deadline"] < TODAY]
-        rows.append({"Événement": e["name"], "Date": e["date"], "J-": (e["date"] - TODAY).days if e["date"] else None,
-                     "Lieu": e["venue"], "Responsable": e["dr"], "Statut": EVENT_STATUS.get(e["status"], e["status"]),
-                     "Préparation": progress_of(tl), "En retard": len(due),
-                     "Inscrits": len(regs), "Acceptés": sum(r["invite_status"] == "accepte" for r in regs)})
-    st.dataframe(pd.DataFrame(rows), hide_index=True, column_config={
-        "Préparation": st.column_config.ProgressColumn("Préparation", min_value=0.0, max_value=1.0, format="percent"),
-        "Date": st.column_config.DateColumn("Date", format="DD/MM/YYYY")})
+    st.subheader("Quels événements nécessitent mon attention ?")
+    attention = []
+    for e in upcoming:
+        k = kp[e["id"]]
+        reasons = []
+        if k["tasks_late"]:
+            reasons.append(f"{k['tasks_late']} tâche(s) en retard")
+        if k["failing"]:
+            reasons.append("automatisation en erreur : " + ", ".join(k["failing"]))
+        if k["flagged"]:
+            reasons.append(f"{k['flagged']} élément(s) à valider")
+        if k["no_answer"]:
+            reasons.append(f"{k['no_answer']} invitation(s) sans réponse")
+        if reasons:
+            attention.append({"Événement": e["name"], "J-": (e["date"] - TODAY).days, "Pourquoi": " · ".join(reasons)})
+    if attention:
+        st.dataframe(pd.DataFrame(attention), hide_index=True)
+    else:
+        st.success("Aucun événement ne demande d'attention particulière.")
+
+    left, right = st.columns(2)
+    with left:
+        st.subheader("E-mails et relances en attente")
+        if previews:
+            st.dataframe(pd.DataFrame([{"Événement": r["event_name"], "Type": KIND_LABELS.get(r["kind"], r["kind"]),
+                                        "Destinataire": r["to_addr"], "Statut": r["status"]} for r in previews[:10]]),
+                         hide_index=True)
+            if len(previews) > 10:
+                st.caption(f"… et {len(previews) - 10} autres (page Automatisations).")
+        else:
+            st.caption("Aucun aperçu en attente.")
+        st.subheader("Actions réalisées automatiquement aujourd'hui")
+        if auto_today:
+            st.dataframe(pd.DataFrame([{"Heure": a["ts"].strftime("%H:%M"), "Action": a["action"], "Détail": a["detail"]}
+                                       for a in auto_today[:10]]), hide_index=True)
+        else:
+            st.caption("Aucune action automatique aujourd'hui.")
+    with right:
+        st.subheader("Automatisations en erreur")
+        if failing:
+            st.dataframe(pd.DataFrame([{"Événement": r["event_name"], "Workflow": r["workflow"],
+                                        "Échecs": r["attempt"], "Erreur": (r["error"] or "").split("\n")[0][:120]}
+                                       for r in failing]), hide_index=True)
+        else:
+            st.success("Aucune automatisation en erreur.")
+        st.subheader("Décisions à prendre")
+        if open_pending:
+            st.dataframe(pd.DataFrame([{"Sujet": p["title"], "Pourquoi": p["reason"]} for p in open_pending[:10]]),
+                         hide_index=True)
+            st.caption("Traitez-les dans « À valider ».")
+        else:
+            st.success("Aucune décision en attente.")
 
 
-def event_picker(cx, key: str):
+
+def open_event(event_id: int):
+    st.session_state["nav"] = f"event:{event_id}"
+
+
+def page_events(cx):
+    with st.expander("➕ Nouvel événement"):
+        with st.form("new-event", clear_on_submit=True):
+            c1, c2, c3 = st.columns(3)
+            name, day, venue = c1.text_input("Ville"), c2.date_input("Date", format="DD/MM/YYYY"), c3.text_input("Lieu")
+            dr = st.text_input("Responsable (DR)")
+            if st.form_submit_button("Créer avec les 22 tâches du référentiel") and name.strip():
+                eid, created = store.upsert_event(cx, name, date=day, venue=venue, dr=dr)
+                n = store.ensure_tasks(cx, eid, get_settings().templates())
+                store.log(cx, "event_created" if created else "event_exists", eid, name.upper(), "utilisateur")
+                flash(f"{name.upper()} : {'créé' if created else 'existait déjà'}, {n} tâche(s) ajoutée(s).")
+                rerun(cx)
     evs = store.list_events(cx)
     if not evs:
-        st.info("Aucun événement : ouvrez « Données » et chargez le jeu de départ, ou créez un événement ci-dessous.")
-        return None
-    names = [e["name"] for e in evs]
-    upcoming = [e["name"] for e in evs if e["date"] and e["date"] >= TODAY]
-    default = names.index(upcoming[0]) if upcoming else 0
-    choice = st.selectbox("Événement", names, index=default, key=key)
-    return store.get_event(cx, choice)
+        st.info("Aucun événement : ouvrez « Données » et chargez le jeu de départ, ou créez-en un ci-dessus.")
+        return
+    soon = get_settings().get("digest", "soon_days", default=7)
+    st.caption("Cliquez sur « Ouvrir » pour accéder à la fiche opérationnelle d'un événement.")
+    for e in evs:
+        k = store.event_kpis(cx, e, TODAY, soon)
+        c = st.columns([2, 1.2, 2, 1.4, 1.6, 1])
+        c[0].markdown(f"**{e['name']}**  \n{e['venue'] or ''}")
+        c[1].write(fr_date(e["date"]) + (f"  \nJ-{(e['date'] - TODAY).days}" if e["date"] and e["date"] >= TODAY else ""))
+        c[2].progress(k["progress"], text=f"{k['tasks_done']}/{k['tasks_total']} tâches")
+        c[3].write(f"{k['accepted']}/{k['registrations']} confirmés")
+        c[4].write(("🔴 " + str(k["tasks_late"]) + " en retard" if k["tasks_late"] else "") +
+                   ("  \n⚠️ erreur" if k["failing"] else ""))
+        c[5].button("Ouvrir", key=f"open-{e['id']}", on_click=open_event, args=(e["id"],))
 
+
+def section_overview(cx, ev):
+    k = store.event_kpis(cx, ev, TODAY, get_settings().get("digest", "soon_days", default=7))
+    c = st.columns(4)
+    c[0].metric("Inscrits / confirmés", f"{k['registrations']} / {k['accepted']}")
+    c[1].metric("Invitations sans réponse", k["no_answer"], help=f"{k['to_invite']} personne(s) pas encore invitée(s)")
+    c[2].metric("E-mails à traiter", k["emails_to_handle"])
+    c[3].metric("Éléments à valider", k["flagged"])
+    c = st.columns(4)
+    c[0].metric("Tâches en retard", k["tasks_late"])
+    c[1].metric("À faire sous 7 jours", k["tasks_soon"])
+    c[2].metric("Automatisations en erreur", len(k["failing"]))
+    c[3].metric("Avancement", f"{k['progress']:.0%}")
+    st.progress(k["progress"], text=f"{k['tasks_done']} / {k['tasks_total']} tâches terminées")
+    if k["failing"]:
+        st.error("Automatisation(s) en erreur : " + ", ".join(k["failing"]) + " (voir « Automatisations »).")
+    st.markdown("**Actions à venir**")
+    if k["next_actions"]:
+        st.dataframe(pd.DataFrame([{"Échéance": t["deadline"], "J": (t["deadline"] - TODAY).days, "Tâche": t["name"],
+                                    "Catégorie": t["category"]} for t in k["next_actions"]]), hide_index=True,
+                     column_config={"Échéance": st.column_config.DateColumn("Échéance", format="DD/MM/YYYY")})
+    else:
+        st.caption("Aucune action à venir.")
+    st.markdown("**Préparation (tâches)**")
+    tab_tasks(cx, ev)
+    with st.expander("Caractéristiques de l'événement (lieu, contact, prix, terrains)"):
+        tab_details(cx, ev)
+
+
+def section_automations(cx, ev):
+    st.caption("Les workflows préparent des aperçus ; rien n'est envoyé. Désactivez-les dans « Paramètres et connexions ».")
+    rows = []
+    for a in store.list_automations(cx):
+        rows.append({"Workflow": a["label"], "Actif": "oui" if a["enabled"] else "non",
+                     "Dernier résultat sur cet événement": store.latest_run_status(cx, a["key"], ev["id"]) or "jamais exécuté"})
+    st.dataframe(pd.DataFrame(rows), hide_index=True)
+    c1, c2 = st.columns(2)
+    if c1.button("Simuler pour cet événement", key=f"sim-{ev['id']}"):
+        st.info(automation.run(get_engine(), get_settings(), TODAY, dry_run=True, trigger="manuel", only_event=ev["id"]).summary())
+    if c2.button("Lancer pour cet événement", key=f"run-{ev['id']}"):
+        res = automation.run(get_engine(), get_settings(), TODAY, trigger="manuel", only_event=ev["id"])
+        (st.error if res.errors else st.success)(res.summary())
+        for n in res.notes:
+            st.warning(n)
+    runs = store.list_runs(cx, ev["id"], limit=50)
+    if runs:
+        st.markdown("**Exécutions**")
+        st.dataframe(pd.DataFrame([{"Date": fmt_dt(r["started_at"]), "Workflow": r["workflow"], "Statut": r["status"],
+                                    "Préparés": r["prepared"], "À valider": r["flagged"], "Essai n°": r["attempt"],
+                                    "Erreur": (r["error"] or "").split("\n")[0][:100]} for r in runs]), hide_index=True)
+
+
+def section_report(cx, ev):
+    k = store.event_kpis(cx, ev, TODAY)
+    sent = cx.execute(select(communications).where((communications.c.event_id == ev["id"]) &
+                                                   (communications.c.status == "sent"))).mappings().all()
+    answered = k["accepted"] + k["refused"]
+    invited = k["registrations"] - k["to_invite"]
+    rate = f"{answered / invited:.0%}" if invited else "n/a"
+    c = st.columns(5)
+    c[0].metric("Inscrits", k["registrations"])
+    c[1].metric("Confirmés", k["accepted"])
+    c[2].metric("Refus", k["refused"])
+    c[3].metric("Taux de réponse", rate)
+    c[4].metric("Communications envoyées", len(sent))
+    st.caption("Les présents effectifs et les retours de questionnaire ne sont pas encore collectés : ils ne sont pas inventés ici.")
+    key = f"report-{ev['id']}"
+    if st.button("Préparer un brouillon à partir des données", key=f"draft-{ev['id']}"):
+        st.session_state[key] = (
+            f"Bilan {ev['name']} — {fr_date(ev['date'])}\n\n"
+            f"Invités : {invited} · Inscrits : {k['registrations']} · Confirmés : {k['accepted']} · "
+            f"Refus : {k['refused']} · Sans réponse : {k['no_answer']} (taux de réponse {rate}).\n"
+            f"Préparation : {k['tasks_done']}/{k['tasks_total']} tâches terminées.\n\n"
+            "Points positifs :\n- \n\nDifficultés :\n- \n\nSuivis à réaliser :\n- ")
+    text = st.text_area("Bilan et suivi post-événement", value=st.session_state.get(key, ev["report"] or ""), height=260, key=f"ta-{key}")
+    if st.button("Enregistrer le bilan", key=f"save-report-{ev['id']}"):
+        store.update_event(cx, ev["id"], report=text)
+        st.session_state[key] = text
+        st.success("Bilan enregistré.")
+
+
+def page_event(cx, event_id: int):
+    ev = store.get_event(cx, event_id)
+    if not ev:
+        st.warning("Cet événement n'existe plus.")
+        return
+    j = f" · J-{(ev['date'] - TODAY).days}" if ev["date"] and ev["date"] >= TODAY else ""
+    st.markdown(f"### {ev['name']} · {fr_date(ev['date'])}{j}" + (f" · {ev['venue']}" if ev["venue"] else ""))
+    names = ["Vue d'ensemble", "Participants et inscriptions", "Staff et intervenants", "Logistique", "Communications",
+             "Automatisations", "Historique", "Bilan et suivi post-événement"]
+    fns = (section_overview, tab_people, tab_staff, tab_documents, tab_comms, section_automations, tab_journal, section_report)
+    for tab, fn in zip(st.tabs(names), fns):
+        with tab:
+            fn(cx, ev)
 
 def tab_details(cx, ev):
     with st.form(f"details-{ev['id']}"):
@@ -303,28 +478,6 @@ def tab_journal(cx, ev):
     st.dataframe(pd.DataFrame([{"Date": fmt_dt(r["ts"]), "Par": r["actor"], "Action": r["action"], "Détail": r["detail"]} for r in rows]), hide_index=True)
 
 
-def page_events(cx):
-    with st.expander("➕ Nouvel événement"):
-        with st.form("new-event", clear_on_submit=True):
-            c1, c2, c3 = st.columns(3)
-            name, day, venue = c1.text_input("Ville", placeholder="LILLE"), c2.date_input("Date", format="DD/MM/YYYY"), c3.text_input("Lieu")
-            dr = st.text_input("Responsable (DR)")
-            if st.form_submit_button("Créer avec les 22 tâches du référentiel") and name.strip():
-                eid, created = store.upsert_event(cx, name, date=day, venue=venue, dr=dr)
-                n = store.ensure_tasks(cx, eid, get_settings().templates())
-                store.log(cx, "event_created" if created else "event_exists", eid, name.upper(), "utilisateur")
-                st.success(f"{name.upper()} : {'créé' if created else 'existait déjà'}, {n} tâche(s) ajoutée(s).")
-                rerun(cx)
-    ev = event_picker(cx, "ev-main")
-    if not ev:
-        return
-    st.markdown(f"### {ev['name']} · {fr_date(ev['date'])}" + (f" · {ev['venue']}" if ev["venue"] else ""))
-    tabs = st.tabs(["Tâches", "Participants", "Staff", "Détails", "Documents", "Communications", "Journal"])
-    for tab, fn in zip(tabs, (tab_tasks, tab_people, tab_staff, tab_details, tab_documents, tab_comms, tab_journal)):
-        with tab:
-            fn(cx, ev)
-
-
 def page_people(cx):
     regs = store.list_registrations(cx)
     if not regs:
@@ -348,26 +501,30 @@ def page_people(cx):
     st.dataframe(df, hide_index=True)
 
 
+
 def page_automation(cx):
-    st.write("Le moteur prépare des **aperçus** et ne **n'envoie rien**. Vous relisez, puis vous marquez comme envoyé "
-             "après l'avoir envoyé vous-même, en attendant le connecteur Outlook.")
+    st.write("Le moteur prépare des **aperçus** et **n'envoie rien**. Relisez, envoyez vous-même, puis cliquez "
+             "« Marquer comme envoyé » en attendant le connecteur Outlook.")
     c1, c2, c3 = st.columns(3)
     if c1.button("Simuler un passage (n'écrit rien)"):
-        st.info(automation.run(get_engine(), get_settings(), TODAY, dry_run=True).summary())
+        st.info(automation.run(get_engine(), get_settings(), TODAY, dry_run=True, trigger="manuel").summary())
     if c2.button("Lancer un passage maintenant"):
-        st.success(automation.run(get_engine(), get_settings(), TODAY).summary())
-        rerun(cx)
-    c3.caption("Passage automatique : toutes les 15 min via GitHub Actions (workflow « engine »).")
+        res = automation.run(get_engine(), get_settings(), TODAY, trigger="manuel")
+        (st.error if res.errors else st.success)(res.summary())
+        for n in res.notes:
+            st.warning(n)
+    c3.caption("Passage automatique : toutes les 15 min via GitHub Actions (workflow « padel-engine »).")
     st.subheader("Communications préparées")
     status = st.multiselect("Statut", ["preview", "approved", "sent", "cancelled"], default=["preview", "approved"])
-    rows = cx.execute(select(communications, t_events.c.name.label("event_name")).join(t_events, t_events.c.id == communications.c.event_id, isouter=True)
-                      .where(communications.c.status.in_(status)).order_by(communications.c.id.desc()).limit(100)).mappings().all()
+    rows = cx.execute(select(communications, t_events.c.name.label("event_name")).join(
+        t_events, t_events.c.id == communications.c.event_id, isouter=True)
+        .where(communications.c.status.in_(status)).order_by(communications.c.id.desc()).limit(100)).mappings().all()
     if not rows:
         st.caption("Aucune communication dans ce filtre.")
     for r in rows:
         with st.expander(f"{r['event_name']} · {KIND_LABELS.get(r['kind'], r['kind'])} → {r['to_addr']} · {r['status']}"):
             st.text(f"Objet : {r['subject']}\n\n{r['body']}")
-            b1, b2, b3 = st.columns(3)
+            b1, b2, _ = st.columns(3)
             if r["status"] in ("preview", "approved"):
                 if b1.button("Marquer comme envoyé", key=f"sent-{r['id']}"):
                     store.mark_sent(cx, r["id"])
@@ -375,19 +532,19 @@ def page_automation(cx):
                 if b2.button("Annuler", key=f"cancel-{r['id']}"):
                     store.set_communication_status(cx, r["id"], "cancelled")
                     rerun(cx)
-    st.subheader("Journal des actions")
-    log = cx.execute(select(action_log).order_by(action_log.c.id.desc()).limit(100)).mappings().all()
-    st.dataframe(pd.DataFrame([{"Date": fmt_dt(r["ts"]), "Par": r["actor"], "Action": r["action"], "Détail": r["detail"]} for r in log]), hide_index=True)
 
 
 def page_validate(cx):
-    rows = cx.execute(select(pending).where(pending.c.status.in_(("open", "postponed"))).order_by(pending.c.id)).mappings().all()
+    st.caption("Uniquement les cas qui nécessitent réellement une décision humaine.")
+    rows = cx.execute(select(pending, t_events.c.name.label("event_name")).join(
+        t_events, t_events.c.id == pending.c.event_id, isouter=True)
+        .where(pending.c.status.in_(("open", "postponed"))).order_by(pending.c.id)).mappings().all()
     if not rows:
         st.success("Rien à valider.")
     for r in rows:
         with st.container(border=True):
             st.markdown(f"**{r['title']}**" + (" _(reporté)_" if r["status"] == "postponed" else ""))
-            st.caption(r["reason"])
+            st.caption(f"Pourquoi : {r['reason']}")
             b1, b2, b3 = st.columns(3)
             for col, (label, status) in zip((b1, b2, b3), (("Accepter", "accepted"), ("Rejeter", "rejected"), ("Reporter", "postponed"))):
                 if col.button(label, key=f"{status}-{r['id']}"):
@@ -395,13 +552,97 @@ def page_validate(cx):
                     rerun(cx)
 
 
+def page_history(cx):
+    evs = {e["id"]: e["name"] for e in store.list_events(cx)}
+    c1, c2, c3 = st.columns(3)
+    pick_ev = c1.multiselect("Événement", sorted(evs.values()))
+    actor = c2.multiselect("Par", ["systeme", "utilisateur", "import"])
+    q = c3.text_input("Recherche")
+    rows = cx.execute(select(action_log).order_by(action_log.c.id.desc()).limit(2000)).mappings().all()
+    df = pd.DataFrame([{"Date": fmt_dt(r["ts"]), "Par": r["actor"], "Événement": evs.get(r["event_id"], ""),
+                        "Action": r["action"], "Détail": r["detail"]} for r in rows])
+    if df.empty:
+        st.info("Aucune action enregistrée pour le moment.")
+        return
+    if pick_ev:
+        df = df[df["Événement"].isin(pick_ev)]
+    if actor:
+        df = df[df["Par"].isin(actor)]
+    if q:
+        df = df[df.apply(lambda r: q.lower() in " ".join(map(str, r.values)).lower(), axis=1)]
+    st.caption(f"{len(df)} action(s) (2 000 dernières au maximum)")
+    st.dataframe(df, hide_index=True)
+    st.download_button("⬇ Exporter en CSV", df.to_csv(index=False), file_name="historique.csv")
+
+
+def page_errors(cx):
+    st.subheader("Automatisations en erreur")
+    failing = [r for r in store.list_runs(cx, status="erreur", limit=300)
+               if store.latest_run_status(cx, r["workflow"], r["event_id"]) == "erreur"]
+    failing = list({(r["workflow"], r["event_id"]): r for r in failing}.values())
+    if not failing:
+        st.success("Aucune automatisation en erreur.")
+    for r in failing:
+        with st.container(border=True):
+            st.markdown(f"**{r['event_name']} · {r['workflow']}** — {r['attempt']} échec(s) consécutif(s) "
+                        f"(après {store.MAX_ATTEMPTS}, le cas passe dans « À valider »)")
+            st.code((r["error"] or "").strip()[:900], language=None)
+            if st.button("Réessayer maintenant", key=f"retry-{r['id']}"):
+                res = automation.run(get_engine(), get_settings(), TODAY, trigger="manuel", only_event=r["event_id"])
+                (st.error if res.errors else st.success)(res.summary())
+    st.subheader("Synchronisations")
+    conns = connections.all_connections(get_engine(), cx)
+    sync = store.get_sync(cx)
+    st.dataframe(pd.DataFrame([{"Connexion": c.name, "État": STATE_LABEL[c.state], "Détail": c.detail,
+                                "Dernière réussite": fmt_dt(sync.get(c.key, {}).get("last_ok_at"))} for c in conns]),
+                 hide_index=True)
+    st.subheader("Historique des exécutions")
+    runs = store.list_runs(cx, limit=100)
+    if runs:
+        st.dataframe(pd.DataFrame([{"Date": fmt_dt(r["started_at"]), "Événement": r["event_name"], "Workflow": r["workflow"],
+                                    "Statut": r["status"], "Préparés": r["prepared"], "Erreur": (r["error"] or "").split("\n")[0][:100]}
+                                   for r in runs]), hide_index=True)
+    else:
+        st.caption("Aucune exécution enregistrée.")
+
+
+STATE_LABEL = {"ok": "🟢 OK (vérifié)", "configure": "🟡 Configuré, non fonctionnel", "erreur": "🔴 Erreur", "absent": "⚪ Non configuré"}
+
+
+def page_settings(cx):
+    st.subheader("Connexions")
+    st.caption("Un état « OK » n'apparaît que si la connexion a été vérifiée par un appel réel. Rien n'est simulé.")
+    test = st.button("Tester Typeform")
+    for c in connections.all_connections(get_engine(), cx, test_typeform=test):
+        with st.container(border=True):
+            st.markdown(f"**{c.name}** — {STATE_LABEL[c.state]}")
+            st.caption(c.detail + ("" if c.developed else "  ·  Branchement non développé dans cette version."))
+            if c.needs:
+                st.caption(f"À fournir : {c.needs}")
+    st.subheader("Automatisations")
+    for a in store.list_automations(cx):
+        c1, c2 = st.columns([4, 1])
+        c1.write(f"**{a['label']}** · mode : aperçu uniquement (envoi automatique indisponible : aucun connecteur d'envoi)")
+        on = c2.toggle("Actif", value=bool(a["enabled"]), key=f"auto-{a['key']}")
+        if on != bool(a["enabled"]):
+            store.set_automation_enabled(cx, a["key"], on)
+            rerun(cx)
+    st.subheader("Règles (lecture seule, modifiables dans config.yaml)")
+    s = get_settings()
+    rows = [{"Règle": f"Échéance « {t.name} »", "Valeur": f"J-{t.offset}"} for t in s.templates() if t.key in ("invitation", "relance")]
+    rows.append({"Règle": "Délai avant relance après invitation", "Valeur": f"{s.get('engine', 'relance_after_days', default=7)} jours"})
+    st.dataframe(pd.DataFrame(rows), hide_index=True)
+    st.subheader("Base de données")
+    st.write(describe(get_engine()))
+
 def page_data(cx):
     settings = get_settings()
     st.write(f"**Base :** {describe(get_engine())}")
     if get_engine().dialect.name == "sqlite":
         st.warning("Base locale temporaire : les données seront perdues au redémarrage. Ajoutez DATABASE_URL (Neon) dans les Secrets.")
     if st.button("Charger les 14 événements connus et leurs 22 tâches"):
-        st.success(importer.seed_events(cx, settings).line())
+        flash(importer.seed_events(cx, settings).line())
+        rerun(cx)
     st.subheader("Importer un export CSV de Notion")
     st.caption("Importez d'abord les événements, puis les tâches, puis les participants. Un import est rejouable : il complète sans écraser.")
     for label, kind in (("Événements", "events"), ("Tâches", "tasks"), ("Participants", "participants"), ("Staff", "staff")):
@@ -420,9 +661,10 @@ def page_data(cx):
                 rep = importer.import_staff(cx, data, default_event or "")
             else:
                 rep = importer.import_participants(cx, data, default_event, settings)
-            st.success(rep.line())
+            flash(rep.line())
             for w in rep.warnings[:30]:
-                st.warning(w)
+                flash(w, "warning")
+            rerun(cx)
     st.subheader("Sauvegarde")
     if st.button("Préparer une sauvegarde (CSV de toutes les tables)"):
         buf = io.BytesIO()
@@ -433,22 +675,47 @@ def page_data(cx):
         st.download_button("⬇ sauvegarde.zip", buf.getvalue(), file_name=f"sauvegarde-padel-{TODAY:%Y%m%d}.zip")
 
 
+
 # ----------------------------------------------------------------------------- application
 st.title("🎾 Adéquat Padel Tour")
 if not check_password():
     st.stop()
 
 PAGES = {"Accueil": page_home, "Événements": page_events, "Participants": page_people,
-         "Automatisations": page_automation, "À valider": page_validate, "Données": page_data}
-with st.sidebar:
-    page = st.radio("Navigation", list(PAGES), label_visibility="collapsed")
-    if st.button("Se déconnecter"):
-        st.session_state.clear()
-        st.rerun()
+         "Automatisations": page_automation, "À valider": page_validate, "Historique des actions": page_history,
+         "Erreurs et synchronisations": page_errors, "Données": page_data, "Paramètres et connexions": page_settings}
+
+
+def build_menu(cx) -> tuple[list[str], dict[str, str]]:
+    """Menu construit dynamiquement : les événements viennent de la base, jamais codés en dur."""
+    labels, options = {}, []
+    for name in PAGES:
+        options.append(f"page:{name}")
+        labels[f"page:{name}"] = name
+        if name == "Événements":
+            for e in store.list_events(cx):
+                options.append(f"event:{e['id']}")
+                labels[f"event:{e['id']}"] = f"\u00a0\u00a0\u00a0\u00a0↳ {e['name']}"
+    return options, labels
+
+
+for _level, _msg in st.session_state.pop("flash", []):
+    getattr(st, _level)(_msg)
 
 try:
     with get_engine().connect() as _cx:
-        PAGES[page](_cx)
+        _options, _labels = build_menu(_cx)
+        if st.session_state.get("nav") not in _options:
+            st.session_state["nav"] = "page:Accueil"
+        with st.sidebar:
+            nav = st.radio("Navigation", _options, key="nav", format_func=_labels.get, label_visibility="collapsed")
+            if st.button("Se déconnecter"):
+                st.session_state.clear()
+                st.rerun()
+        if nav.startswith("event:"):
+            page_event(_cx, int(nav.split(":", 1)[1]))
+        else:
+            PAGES[nav.split(":", 1)[1]](_cx)
         _cx.commit()
 except Exception as exc:  # noqa: BLE001
     st.error(f"Erreur : {exc}")
