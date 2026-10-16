@@ -183,6 +183,35 @@ def participation(regs: list[dict], capacity: int | None = None) -> dict:
     return out
 
 
+def reset_form_signups(cx, event_id: int, actor: str = "utilisateur") -> tuple[int, int]:
+    """Supprime les inscriptions d'un événement venues du formulaire (source « formulaire ») et les personnes créées
+    uniquement par elles. N'efface ni les saisies manuelles, ni les imports Notion. Retourne (inscriptions, personnes)."""
+    ids = [r[0] for r in cx.execute(select(registrations.c.person_id).where(and_(
+        registrations.c.event_id == event_id, registrations.c.source == "formulaire")))]
+    n_reg = cx.execute(delete(registrations).where(and_(
+        registrations.c.event_id == event_id, registrations.c.source == "formulaire"))).rowcount or 0
+    n_people = 0
+    for pid in set(ids):
+        still = cx.execute(select(registrations.c.id).where(registrations.c.person_id == pid)).first()
+        if not still:
+            n_people += cx.execute(delete(people).where(and_(people.c.id == pid, people.c.source == "formulaire"))).rowcount or 0
+    log(cx, "reset_signups", event_id, f"{n_reg} inscription(s) du formulaire et {n_people} personne(s) supprimée(s)", actor)
+    return n_reg, n_people
+
+
+def purge_form_signups(cx, event_id: int, actor: str = "utilisateur") -> tuple[int, int]:
+    """Efface les inscriptions créées par le formulaire (source « formulaire ») pour cet événement, puis les personnes
+    créées par le formulaire qui n'ont plus aucune inscription. Les saisies manuelles et les imports Notion sont intacts.
+    Retourne (inscriptions effacées, personnes effacées)."""
+    r = cx.execute(delete(registrations).where(and_(registrations.c.event_id == event_id,
+                                                    registrations.c.source == "formulaire")))
+    regs_n = r.rowcount or 0
+    still = select(registrations.c.person_id)
+    p = cx.execute(delete(people).where(and_(people.c.source == "formulaire", people.c.id.not_in(still))))
+    log(cx, "purge_formulaire", event_id, f"{regs_n} inscription(s) du formulaire effacée(s) avant resynchronisation", actor)
+    return regs_n, p.rowcount or 0
+
+
 def set_poules(cx, event_id: int, mapping: dict[int, str], actor: str = "utilisateur") -> int:
     """Écrit la poule de chaque inscription (id d'inscription -> « A », « B »…). Retourne le nombre modifié."""
     n = 0

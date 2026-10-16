@@ -239,3 +239,34 @@ def test_diagnostic_reports_players_per_response_without_personal_data():
     resp = [{"submitted_at": "2026-10-01T08:00:00Z", "answers": [T("a", "Zoé"), T("b", "Quentin"), T("c", "Marie"), T("d", "Curie")]}]
     diag = "\n".join(typeform_diagnostic(form, resp, load_settings()))
     assert "Réponse 1" in diag and "joueur(s) détecté(s) : 2 (équipe)" in diag and "Quentin" not in diag
+
+
+def test_reset_removes_only_form_signups(env):
+    eng, s = env
+    with eng.begin() as cx:
+        eid = store.get_event(cx, "ANGERS")["id"]
+        importer.import_signups(cx, CSV.read_text(encoding="utf-8-sig"), "ANGERS", s)
+        pid, _ = store.upsert_person(cx, prenom="Manuel", nom="Saisi", email="m@x.fr", source="saisie")
+        store.upsert_registration(cx, eid, pid, type="Tournoi", source="saisie")
+        assert len(store.list_registrations(cx, eid)) == 16
+        assert store.reset_form_signups(cx, eid) == (15, 15)
+        left = store.list_registrations(cx, eid)
+    assert [r["nom"] for r in left] == ["Saisi"]
+    with eng.begin() as cx:   # re-synchroniser après nettoyage donne exactement les mêmes 15 inscrits, sans doublon
+        importer.import_signups(cx, CSV.read_text(encoding="utf-8-sig"), "ANGERS", s)
+        assert len(store.list_registrations(cx, eid)) == 16
+
+
+def test_purge_then_resync_replaces_wrong_rows_but_keeps_manual_entries(env):
+    eng, s = env
+    with eng.begin() as cx:
+        eid = store.get_event(cx, "ANGERS")["id"]
+        store.update_event(cx, eid, typeform_id="FORM1")
+        pid, _ = store.upsert_person(cx, prenom="", nom="", email="vieux@x.fr", company="Directrice", source="formulaire")
+        store.upsert_registration(cx, eid, pid, type="Tournoi", source="formulaire", invite_status="accepte")
+        mid, _ = store.upsert_person(cx, prenom="Manuel", nom="Saisi", email="m@x.fr", source="saisie")
+        store.upsert_registration(cx, eid, mid, type="Tournoi", source="saisie")
+        assert store.purge_form_signups(cx, eid) == (1, 1)
+        importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s)
+        regs = store.list_registrations(cx, eid)
+    assert {r["nom"] for r in regs} == {"Roy", "Lam", "Vidal", "Saisi"} and not any(r["email"] == "vieux@x.fr" for r in regs)
