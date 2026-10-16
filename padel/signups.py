@@ -171,7 +171,6 @@ def typeform_diagnostic(form: dict, responses: list[dict], settings: Settings | 
     if unknown:
         lines.append(f"{len(unknown)} réponse(s) à des questions absentes de la définition du formulaire (types : "
                      + ", ".join(sorted({a.get('type', '?') for r in responses for a in r.get('answers', []) if a['field']['id'] not in known})) + ")")
-    return lines
     if settings is not None:
         rows = typeform_rows(form, responses)
         matchers = settings.get("typeform", "fields")
@@ -182,3 +181,4 @@ def typeform_diagnostic(form: dict, responses: list[dict], settings: Settings | 
             n = len(players[0]["players"]) if players else 0
             lines.append(f"Réponse {i} : {len(row) - 1} colonne(s) remplie(s) · champs reconnus : {', '.join(found) or 'aucun'} · "
                          f"joueur(s) détecté(s) : {n}" + (" (équipe)" if n == 2 else ""))
+    return lines
