@@ -69,8 +69,15 @@ def get_engine():
 
 
 @st.cache_resource
-def get_settings():
+def _settings_for(version: str):  # `version` change => config.yaml rechargé sans redémarrer le processus
     return load_settings(use_dotenv=False)
+
+
+def get_settings():
+    from pathlib import Path
+    cfg = Path(__file__).parent / "config.yaml"
+    stat = cfg.stat()
+    return _settings_for(f"{stat.st_mtime_ns}-{stat.st_size}-{bool(os.environ.get('TYPEFORM_TOKEN'))}")
 
 
 def fmt_dt(value) -> str:
