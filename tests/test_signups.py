@@ -193,3 +193,38 @@ def test_second_contact_block_is_the_partner():
         out, warns, _ = parse_signups(typeform_rows(form, resp), load_settings())
         assert len(out) == 1 and len(out[0]["players"]) == 2, second_title
         assert out[0]["team"] == "Diaz / Ray" and out[0]["players"][1]["email"] == "b@x.fr"
+
+
+def test_real_angers_form_structure():
+    """Structure relevée sur le vrai formulaire : bloc coordonnées en anglais + bloc « collaborateur » (prénom, nom)."""
+    from padel.signups import typeform_rows
+    F = lambda i, t, ty, parent=None: {"id": i, "type": ty, "title": t}  # noqa: E731
+    form = {"fields": [
+        {"id": "g1", "type": "contact_info", "title": "Remplir vos coordonnées ", "properties": {"fields": [
+            F("a", "First name", "short_text"), F("b", "Last name", "short_text"), F("c", "Phone number", "phone_number"),
+            F("d", "Email", "email"), F("e", "Company", "short_text")]}},
+        F("f", "Quelle fonction occupez-vous dans votre entreprise ? ", "short_text"),
+        F("g", "Merci de préciser votre participation à l’évènement :", "multiple_choice"),
+        F("h", "Souhaitez-vous participer seul ou avec un collaborateur ?", "multiple_choice"),
+        {"id": "g2", "type": "contact_info", "title": "Veuillez renseigner les coordonnées de votre collaborateur",
+         "properties": {"fields": [F("i", "Prénom", "short_text"), F("j", "Nom", "short_text")]}},
+        F("k", "Quel est votre niveau de padel ?", "opinion_scale"),
+        F("l", "Quels sont selon vous les 3 enjeux les plus prioritaires pour votre entreprise pour les 12 prochains mois ?", "multiple_choice")]}
+    T = lambda i, v: {"field": {"id": i}, "type": "text", "text": v}  # noqa: E731
+    resp = [{"submitted_at": "2026-10-10T08:00:00Z", "answers": [
+        T("a", "Julie"), T("b", "Martin"), {"field": {"id": "c"}, "type": "phone_number", "phone_number": "+33612345678"},
+        {"field": {"id": "d"}, "type": "email", "email": "j@x.fr"}, T("e", "Acme"), T("f", "Directrice"),
+        {"field": {"id": "g"}, "type": "choice", "choice": {"label": "Tournoi"}},
+        {"field": {"id": "h"}, "type": "choice", "choice": {"label": "Avec un collaborateur"}},
+        T("i", "Paul"), T("j", "Durand"), {"field": {"id": "k"}, "type": "number", "number": 6},
+        {"field": {"id": "l"}, "type": "choices", "choices": {"labels": ["Recrutement", "Croissance"]}}]},
+        {"submitted_at": "2026-10-11T08:00:00Z", "answers": [
+        T("a", "Sam"), T("b", "Roy"), {"field": {"id": "d"}, "type": "email", "email": "s@x.fr"}, T("e", "Beta"),
+        {"field": {"id": "k"}, "type": "number", "number": 3}]}]
+    out, warns, _ = parse_signups(typeform_rows(form, resp), load_settings())
+    assert len(out) == 2
+    a, b = out[0]["players"]
+    assert (a["prenom"], a["nom"], a["email"], a["phone"], a["company"], a["position"], a["level"], a["type"]) == \
+        ("Julie", "Martin", "j@x.fr", "+33612345678", "Acme", "Directrice", "6", "Tournoi")
+    assert (b["prenom"], b["nom"], b["company"]) == ("Paul", "Durand", "Acme") and out[0]["team"] == "Durand / Martin"
+    assert out[0]["stakes"] == "Recrutement, Croissance" and len(out[1]["players"]) == 1

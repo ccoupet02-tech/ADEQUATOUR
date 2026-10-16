@@ -65,7 +65,7 @@ def parse_signups(rows: list[dict], settings: Settings | None = None) -> tuple[l
     for i, row in enumerate(rows, start=2):
         g = lambda k, join=False: _val(row, mapping.get(k, []), join or k in MULTI)  # noqa: E731
         main = {"prenom": g("prenom"), "nom": g("nom"), "email": g("email").lower(), "phone": g("telephone"),
-                "company": g("company"), "level": g("level"),
+                "company": g("company"), "position": g("position"), "level": g("level"),
                 "size": normalize_size(g("size"), sizes) or "",
                 "type": normalize_type(g("type"), settings) or g("type")}
         if not (main["prenom"] or main["nom"] or main["email"]):
@@ -76,7 +76,7 @@ def parse_signups(rows: list[dict], settings: Settings | None = None) -> tuple[l
         if pname or pmail:
             pp, pn = split_name(pname)
             partner = {"prenom": pp, "nom": pn, "email": pmail, "phone": g("partner_phone"),
-                       "company": g("partner_company") or main["company"], "level": g("partner_level"),
+                       "company": g("partner_company") or main["company"], "position": "", "level": g("partner_level"),
                        "size": "", "type": main["type"]}
             if not partner["level"] and main["level"]:
                 partner["level"] = main["level"]

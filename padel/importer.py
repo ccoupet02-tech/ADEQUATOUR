@@ -249,7 +249,7 @@ def import_signups(cx, source, event: str, settings: Settings | None = None, dry
                 rep.updated += 1 if known else 0
                 continue
             pid, _ = store.upsert_person(cx, prenom=p["prenom"], nom=p["nom"], email=p["email"], phone=_clean_phone(p["phone"]),
-                                         company=p["company"], source="formulaire")
+                                         company=p["company"], position=p.get("position", ""), source="formulaire")
             _, new = store.upsert_registration(
                 cx, ev["id"], pid, type=p["type"] or "Tournoi", team=s["team"], size=p["size"], level=p["level"],
                 stakes=s["stakes"], registered_at=s["registered_at"], source="formulaire", invite_status="accepte")

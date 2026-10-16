@@ -107,18 +107,19 @@ typeform:
   #   none   : mots interdits.   (comparaison sans accent, début de mot)
   # Lancer `python -m padel typeform-fields --event DIJON` pour vérifier le résultat.
   fields:
-    prenom:        {all_of: [[prenom]], none: [coequipier, partenaire, binome, equipier, collaborateur, collegue]}
-    nom:           {all_of: [[nom]], none: [prenom, nombre, entreprise, societe, equipe, coequipier, partenaire, binome, equipier, collaborateur, collegue]}
+    prenom:        {all_of: [[prenom, first]], none: [coequipier, partenaire, binome, equipier, collaborateur, collegue]}
+    nom:           {all_of: [[nom, last, surname]], none: [prenom, first, nombre, entreprise, societe, equipe, coequipier, partenaire, binome, equipier, collaborateur, collegue]}
     email:         {all_of: [[mail, email, courriel]], none: [coequipier, partenaire, binome, equipier, collaborateur, collegue]}
-    telephone:     {all_of: [[telephone, tel, portable, mobile, gsm]], none: [coequipier, partenaire, binome, equipier, collaborateur, collegue]}
-    company:       {all_of: [[entreprise, societe, agence]], none: [coequipier, partenaire, binome, equipier, collaborateur, collegue]}
+    telephone:     {all_of: [[telephone, tel, portable, mobile, gsm, phone]], none: [coequipier, partenaire, binome, equipier, collaborateur, collegue]}
+    company:       {all_of: [[entreprise, societe, agence, company]], none: [coequipier, partenaire, binome, equipier, collaborateur, collegue, fonction, poste, enjeu, enjeux, occupez]}
+    position:      {all_of: [[fonction, poste, position]], none: [coequipier, partenaire, binome, equipier, collaborateur, collegue]}
     level:         {all_of: [[niveau]], none: [coequipier, partenaire, binome, equipier, collaborateur, collegue]}
     size:          {all_of: [[taille, shirt, tshirt]], none: [coequipier, partenaire, binome, equipier, collaborateur, collegue]}
     type:          {all_of: [[tournoi, initiation, participation, formule]], none: [nom, prenom, mail, telephone]}
     partner_name:  {all_of: [[coequipier, partenaire, binome, equipier, collaborateur, collegue], [nom, prenom]], none: [mail, email, telephone, niveau, taille]}
     partner_email: {all_of: [[coequipier, partenaire, binome, equipier, collaborateur, collegue], [mail, email]]}
-    partner_phone: {all_of: [[coequipier, partenaire, binome, equipier, collaborateur, collegue], [telephone, tel, portable, mobile, gsm]]}
-    partner_company: {all_of: [[coequipier, partenaire, binome, equipier, collaborateur, collegue], [entreprise, societe, agence]]}
+    partner_phone: {all_of: [[coequipier, partenaire, binome, equipier, collaborateur, collegue], [telephone, tel, portable, mobile, gsm, phone]]}
+    partner_company: {all_of: [[coequipier, partenaire, binome, equipier, collaborateur, collegue], [entreprise, societe, agence, company]]}
     partner_level: {all_of: [[coequipier, partenaire, binome, equipier, collaborateur, collegue], [niveau]]}
     stakes:        {all_of: [[enjeu, enjeux, objectif, attente, attentes]], none: [coequipier, partenaire, binome, equipier, collaborateur, collegue]}
     submitted:     {all_of: [[horodateur, horodatage, timestamp, submitted, soumis, date]], none: [naissance]}
