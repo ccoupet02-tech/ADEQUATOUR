@@ -11,7 +11,7 @@ import hmac
 import io
 import os
 import zipfile
-from datetime import date
+from datetime import datetime, date
 
 import pandas as pd
 import streamlit as st
@@ -415,10 +415,16 @@ def tab_people(cx, ev):
             if b2.button("Synchroniser maintenant", key=f"tf-go-{ev['id']}"):
                 try:
                     rep = importer.sync_typeform(cx, ev["name"], get_settings().typeform_client(), get_settings())
+                    st.session_state[f"tf-last-{ev['id']}"] = (f"{datetime.now():%H:%M:%S} · " + rep.line(), list(rep.warnings))
                     flash(rep.line())
                     rerun(cx)
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Typeform : {exc}")
+        last = st.session_state.get(f"tf-last-{ev['id']}")
+        if last:
+            st.info("Dernière synchronisation : " + last[0])
+            for w in last[1]:
+                st.warning(w)
         n_form = sum(1 for r in regs if r["source"] == "formulaire")
         if n_form:
             st.caption(f"{n_form} inscription(s) viennent déjà du formulaire. Si elles ont été importées avec une ancienne version "
@@ -450,6 +456,8 @@ def tab_people(cx, ev):
                 rep = importer.import_signups(cx, data, ev["name"], get_settings())
                 flash(rep.line())
                 rerun(cx)
+    if not regs:
+        st.info("Aucun inscrit enregistré pour cet événement. Synchronisez Typeform (bloc ci-dessus) ou importez un fichier.")
     if regs:
         df = pd.DataFrame([{"id": r["id"], "Prénom": r["prenom"], "Nom": r["nom"], "Entreprise": r["company"],
                             "E-mail": r["email"], "Téléphone": r["phone"], "Type": r["type"], "Équipe": r["team"],
