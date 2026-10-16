@@ -228,3 +228,14 @@ def test_real_angers_form_structure():
         ("Julie", "Martin", "j@x.fr", "+33612345678", "Acme", "Directrice", "6", "Tournoi")
     assert (b["prenom"], b["nom"], b["company"]) == ("Paul", "Durand", "Acme") and out[0]["team"] == "Durand / Martin"
     assert out[0]["stakes"] == "Recrutement, Croissance" and len(out[1]["players"]) == 1
+
+
+def test_diagnostic_reports_players_per_response_without_personal_data():
+    from padel.signups import typeform_diagnostic
+    form = {"fields": [{"id": "a", "type": "short_text", "title": "Prénom"}, {"id": "b", "type": "short_text", "title": "Nom"},
+                       {"id": "c", "type": "short_text", "title": "Prénom du collaborateur"},
+                       {"id": "d", "type": "short_text", "title": "Nom du collaborateur"}]}
+    T = lambda i, v: {"field": {"id": i}, "type": "text", "text": v}  # noqa: E731
+    resp = [{"submitted_at": "2026-10-01T08:00:00Z", "answers": [T("a", "Zoé"), T("b", "Quentin"), T("c", "Marie"), T("d", "Curie")]}]
+    diag = "\n".join(typeform_diagnostic(form, resp, load_settings()))
+    assert "Réponse 1" in diag and "joueur(s) détecté(s) : 2 (équipe)" in diag and "Quentin" not in diag

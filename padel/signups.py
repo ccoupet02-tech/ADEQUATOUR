@@ -152,7 +152,7 @@ def typeform_rows(form: dict, responses: list[dict]) -> list[dict]:
     return rows
 
 
-def typeform_diagnostic(form: dict, responses: list[dict]) -> list[str]:
+def typeform_diagnostic(form: dict, responses: list[dict], settings: Settings | None = None) -> list[str]:
     """Description de la structure du formulaire SANS aucune donnée personnelle (titres, types, nombre de réponses)."""
     from .typeform import flatten_fields
     cols = form_column_names(form)
@@ -172,3 +172,13 @@ def typeform_diagnostic(form: dict, responses: list[dict]) -> list[str]:
         lines.append(f"{len(unknown)} réponse(s) à des questions absentes de la définition du formulaire (types : "
                      + ", ".join(sorted({a.get('type', '?') for r in responses for a in r.get('answers', []) if a['field']['id'] not in known})) + ")")
     return lines
+    if settings is not None:
+        rows = typeform_rows(form, responses)
+        matchers = settings.get("typeform", "fields")
+        for i, row in enumerate(rows, 1):
+            hits = {k: [h for h in row if title_matches(h, spec)] for k, spec in matchers.items()}
+            found = sorted(k for k, v in hits.items() if v)
+            players, _, _ = parse_signups([row], settings)
+            n = len(players[0]["players"]) if players else 0
+            lines.append(f"Réponse {i} : {len(row) - 1} colonne(s) remplie(s) · champs reconnus : {', '.join(found) or 'aucun'} · "
+                         f"joueur(s) détecté(s) : {n}" + (" (équipe)" if n == 2 else ""))

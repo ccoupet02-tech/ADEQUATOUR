@@ -416,7 +416,7 @@ def tab_people(cx, ev):
             try:
                 from padel.signups import typeform_diagnostic
                 cl = get_settings().typeform_client()
-                st.code("\n".join(typeform_diagnostic(cl.get_form(ev["typeform_id"].strip()), list(cl.iter_responses(ev["typeform_id"].strip())))))
+                st.code("\n".join(typeform_diagnostic(cl.get_form(ev["typeform_id"].strip()), list(cl.iter_responses(ev["typeform_id"].strip())), get_settings())))
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Typeform : {exc}")
         st.caption("Une fois l'identifiant et le jeton en place, le moteur récupère seul les nouvelles inscriptions toutes les 15 minutes.")
