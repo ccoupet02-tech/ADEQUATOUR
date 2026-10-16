@@ -53,16 +53,17 @@ class TypeformClient:
             before = items[-1]["token"]
 
 
-def flatten_fields(fields: list[dict] | None) -> list[dict]:
-    """Aplatit les questions, y compris les groupes et les blocs « coordonnées » (contact_info) qui contiennent des sous-questions."""
+def flatten_fields(fields: list[dict] | None, parent: str = "") -> list[dict]:
+    """Aplatit les questions, y compris les groupes et les blocs « coordonnées » (contact_info) qui contiennent des
+    sous-questions ; `parent` = titre du bloc qui les contient."""
     out = []
     for f in fields or []:
         children = (f.get("properties") or {}).get("fields")
         if children:
-            out.extend(flatten_fields(children))
+            out.extend(flatten_fields(children, f.get("title", "")))
         else:
             out.append({"id": f["id"], "ref": f.get("ref"), "title": f.get("title", ""),
-                        "type": f.get("type")})
+                        "type": f.get("type"), "parent": parent})
     return out
 
 

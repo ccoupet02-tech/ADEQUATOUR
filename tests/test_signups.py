@@ -174,3 +174,22 @@ def test_contact_block_and_hidden_fields_are_read():
     assert out[0]["stakes"] == "Réseau" and not warns
     diag = "\n".join(typeform_diagnostic(form, resp))
     assert "Ana" not in diag and "a@x.fr" not in diag and "first_name" in diag
+
+
+def test_second_contact_block_is_the_partner():
+    """Deux blocs de coordonnées aux intitulés identiques : le 2e (collaborateur) forme une équipe avec le 1er."""
+    from padel.signups import typeform_rows
+
+    def block(i, title):
+        return {"id": f"b{i}", "type": "contact_info", "title": title, "properties": {"fields": [
+            {"id": f"p{i}", "type": "short_text", "title": "Prénom"}, {"id": f"n{i}", "type": "short_text", "title": "Nom"},
+            {"id": f"e{i}", "type": "email", "title": "E-mail"}]}}
+    for second_title in ("Coordonnées de votre collaborateur", "Remplir vos coordonnées"):  # avec ou sans mot-clé
+        form = {"fields": [block(1, "Remplir vos coordonnées"), block(2, second_title)]}
+        ans = lambda fid, t, v: {"field": {"id": fid}, "type": t, t: v}  # noqa: E731
+        resp = [{"submitted_at": "2026-10-01T08:00:00Z", "answers": [
+            ans("p1", "text", "Ana"), ans("n1", "text", "Diaz"), ans("e1", "email", "a@x.fr"),
+            ans("p2", "text", "Bob"), ans("n2", "text", "Ray"), ans("e2", "email", "b@x.fr")]}]
+        out, warns, _ = parse_signups(typeform_rows(form, resp), load_settings())
+        assert len(out) == 1 and len(out[0]["players"]) == 2, second_title
+        assert out[0]["team"] == "Diaz / Ray" and out[0]["players"][1]["email"] == "b@x.fr"

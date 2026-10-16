@@ -107,25 +107,36 @@ def parse_signups(rows: list[dict], settings: Settings | None = None) -> tuple[l
 _REF_ALIASES = [("first", "prenom"), ("last", "nom"), ("phone", "telephone"), ("mobile", "telephone"),
                 ("email", "email"), ("mail", "email"), ("company", "entreprise")]
 _TYPE_ALIASES = {"email": "email", "phone_number": "telephone"}
+PARTNER_WORDS = ("coequipier", "partenaire", "binome", "equipier", "collaborateur", "collegue", "invite")
+PARTNER_PREFIX = "collaborateur "
 
 
-def _column_name(field: dict | None, answer: dict) -> str:
-    """Intitulé de la question ; à défaut, déduit de la référence ou du type de réponse (blocs « coordonnées »)."""
-    title = norm((field or {}).get("title", ""))
-    if title:
-        return title
-    ref = norm(((field or {}).get("ref") or answer.get("field", {}).get("ref") or "").replace("_", " "))
-    for key, alias in _REF_ALIASES:
-        if key in ref:
-            return alias
-    return _TYPE_ALIASES.get(answer.get("type"), ref)
+def form_column_names(form: dict) -> dict[str, str]:
+    """id de question -> nom de colonne. Une question sans titre est déduite de sa référence ou de son type. Les questions
+    d'un bloc « collaborateur/coéquipier », ou répétées une 2e fois dans le formulaire (2e bloc de coordonnées), sont
+    préfixées « collaborateur » pour ne jamais être confondues avec celles du participant principal."""
+    from .typeform import flatten_fields
+    names: dict[str, str] = {}
+    seen: set[str] = set()
+    for f in flatten_fields(form.get("fields")):
+        name = norm(f["title"])
+        if not name:
+            ref = norm((f.get("ref") or "").replace("_", " "))
+            name = next((alias for key, alias in _REF_ALIASES if key in ref), _TYPE_ALIASES.get(f["type"], ref))
+        parent = norm(f.get("parent", ""))
+        partner_block = any(w in parent for w in PARTNER_WORDS)
+        if name and not any(w in name for w in PARTNER_WORDS):
+            if partner_block or name in seen:
+                name = PARTNER_PREFIX + name
+        seen.add(norm(f["title"]) or name)
+        names[f["id"]] = name
+    return names
 
 
 def typeform_rows(form: dict, responses: list[dict]) -> list[dict]:
-    """Réponses Typeform -> lignes {intitulé de la question normalisé: réponse}, au même format que l'export CSV.
-    Les champs cachés (hidden) deviennent aussi des colonnes."""
-    from .typeform import answer_value, flatten_fields
-    by_id = {f["id"]: f for f in flatten_fields(form.get("fields"))}
+    """Réponses Typeform -> lignes {nom de colonne: réponse}, au même format que l'export CSV (champs cachés inclus)."""
+    from .typeform import answer_value
+    names = form_column_names(form)
     rows = []
     for r in sorted(responses, key=lambda x: x.get("submitted_at", "")):
         row = {"submitted_at": (r.get("submitted_at") or "").replace("T", " ").replace("Z", "")}
@@ -133,7 +144,7 @@ def typeform_rows(form: dict, responses: list[dict]) -> list[dict]:
             if v not in (None, ""):
                 row[norm(k)] = str(v).strip()
         for a in r.get("answers", []):
-            name = _column_name(by_id.get(a["field"]["id"]), a)
+            name = names.get(a["field"]["id"]) or _TYPE_ALIASES.get(a.get("type"), "")
             v = answer_value(a)
             if name and v not in (None, ""):
                 row[name] = str(v).strip()
@@ -144,9 +155,11 @@ def typeform_rows(form: dict, responses: list[dict]) -> list[dict]:
 def typeform_diagnostic(form: dict, responses: list[dict]) -> list[str]:
     """Description de la structure du formulaire SANS aucune donnée personnelle (titres, types, nombre de réponses)."""
     from .typeform import flatten_fields
+    cols = form_column_names(form)
     lines = [f"{len(responses)} réponse(s) complète(s) lue(s)."]
     for f in flatten_fields(form.get("fields")):
-        lines.append(f"Question : « {f['title'] or '(sans titre)'} » · type {f['type']} · ref {f['ref']}")
+        lines.append(f"Question : « {f['title'] or '(sans titre)'} » · type {f['type']} · ref {f['ref']} · bloc « {f.get('parent') or '-'} » "
+                     f"→ colonne « {cols.get(f['id'], '?')} »")
     hidden = sorted({k for r in responses for k in (r.get("hidden") or {})})
     lines.append("Champs cachés : " + (", ".join(hidden) if hidden else "aucun"))
     answered = {}
