@@ -428,23 +428,6 @@ def tab_people(cx, ev):
                 a, b = store.reset_form_signups(cx, ev["id"])
                 flash(f"{a} inscription(s) supprimée(s). Cliquez maintenant sur « Synchroniser maintenant ».")
                 rerun(cx)
-        if ev["typeform_id"] and os.environ.get("TYPEFORM_TOKEN"):
-            st.divider()
-            st.caption("Des lignes erronées issues d'une ancienne synchronisation ? Cette action efface UNIQUEMENT les inscriptions "
-                       "venues du formulaire pour cet événement (pas vos saisies manuelles), puis relit Typeform depuis zéro.")
-            sure = st.checkbox("Je confirme : effacer les inscriptions issues du formulaire de cet événement", key=f"tf-sure-{ev['id']}")
-            if st.button("Effacer et resynchroniser depuis Typeform", key=f"tf-reset-{ev['id']}", disabled=not sure):
-                try:
-                    rep = importer.sync_typeform(cx, ev["name"], get_settings().typeform_client(), get_settings(), dry_run=True)
-                    if rep.created + rep.updated == 0:
-                        st.error("Typeform n'a renvoyé aucune inscription exploitable : rien n'a été effacé.")
-                    else:
-                        n_reg, n_p = store.purge_form_signups(cx, ev["id"])
-                        rep = importer.sync_typeform(cx, ev["name"], get_settings().typeform_client(), get_settings())
-                        flash(f"{n_reg} ancienne(s) inscription(s) effacée(s). Relecture : " + rep.line())
-                        rerun(cx)
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Typeform : {exc}")
         if os.environ.get("TYPEFORM_TOKEN") and ev["typeform_id"] and st.button("Diagnostic du formulaire (sans données personnelles)", key=f"tf-diag-{ev['id']}"):
             try:
                 from padel.signups import typeform_diagnostic

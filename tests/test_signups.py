@@ -266,7 +266,7 @@ def test_purge_then_resync_replaces_wrong_rows_but_keeps_manual_entries(env):
         store.upsert_registration(cx, eid, pid, type="Tournoi", source="formulaire", invite_status="accepte")
         mid, _ = store.upsert_person(cx, prenom="Manuel", nom="Saisi", email="m@x.fr", source="saisie")
         store.upsert_registration(cx, eid, mid, type="Tournoi", source="saisie")
-        assert store.purge_form_signups(cx, eid) == (1, 1)
+        assert store.reset_form_signups(cx, eid) == (1, 1)
         importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s)
         regs = store.list_registrations(cx, eid)
     assert {r["nom"] for r in regs} == {"Roy", "Lam", "Vidal", "Saisi"} and not any(r["email"] == "vieux@x.fr" for r in regs)
