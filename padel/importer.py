@@ -242,6 +242,21 @@ def import_signups(cx, source, event: str, settings: Settings | None = None, dry
         return rep
     signups, warns, _ = parse_signups(source if isinstance(source, list) else read_rows(source), settings)
     rep.warnings.extend(warns)
+    ignored = {r["pkey"] for r in store.list_ignored(cx, ev["id"])}
+    if ignored:                      # inscriptions mises de côté par l'utilisateur (tests, doublons) : jamais recréées
+        pk = lambda p: store.person_key(p["prenom"], p["nom"], p["email"], p["company"])  # noqa: E731
+        kept, skipped = [], 0
+        for s in signups:
+            if pk(s["players"][0]) in ignored:
+                skipped += 1
+                continue
+            if len(s["players"]) == 2 and pk(s["players"][1]) in ignored:
+                s = {**s, "players": s["players"][:1], "team": ""}
+                skipped += 1
+            kept.append(s)
+        signups = kept
+        if skipped:
+            rep.warnings.append(f"{skipped} inscription(s) ignorée(s) à votre demande (voir « Inscriptions ignorées »).")
     teams = solos = 0
     keep_ids: set[int] = set()
     keep_keys: set[str] = set()

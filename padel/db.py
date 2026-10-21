@@ -171,8 +171,19 @@ sync_state = Table(
     Column("last_error", Text, default=""),
 )
 
+ignored_signups = Table(
+    "ignored_signups", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("event_id", Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False),
+    Column("pkey", String(300), nullable=False),        # personne ignorée (même clé que people.pkey)
+    Column("label", String(200), default=""),           # nom affiché pour pouvoir la rétablir
+    Column("reason", String(200), default=""),
+    Column("created_at", DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)),
+    UniqueConstraint("event_id", "pkey", name="uq_ignored_signup"),
+)
+
 TABLES = [events, people, registrations, tasks, staff, communications, action_log, pending, automations,
-          workflow_runs, sync_state]
+          workflow_runs, sync_state, ignored_signups]
 
 
 def normalize_url(url: str) -> tuple[str, dict]:

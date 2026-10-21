@@ -305,3 +305,35 @@ def test_dedup_rules_unit():
             {"submitted_at": "2026-10-03 08:00:00", "prenom": "Ana", "nom": "Diaz", "email": "a2@x.fr"}]  # Ana aussi (autre e-mail)
     out, warns, _ = parse_signups(rows, load_settings())
     assert [[p["prenom"] for p in e["players"]] for e in out] == [["Bob"], ["Ana"]] and len(warns) >= 1
+
+
+def test_ignored_signup_stays_out_of_every_sync_and_can_be_restored(env):
+    eng, s = env
+    with eng.begin() as cx:
+        eid = store.get_event(cx, "ANGERS")["id"]
+        store.update_event(cx, eid, typeform_id="FORM1")
+        importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s)
+        vidal = next(r for r in store.list_registrations(cx, eid) if r["nom"] == "Vidal")
+        assert store.ignore_registration(cx, vidal["id"], "test")
+    with eng.begin() as cx:
+        r = importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s)
+        assert "Vidal" not in {x["nom"] for x in store.list_registrations(cx, eid)}
+        assert any("ignorée" in w for w in r.warnings)
+        ig = store.list_ignored(cx, eid)
+        assert len(ig) == 1 and ig[0]["reason"] == "test"
+        store.unignore(cx, ig[0]["id"])
+        importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s)
+        assert "Vidal" in {x["nom"] for x in store.list_registrations(cx, eid)}
+
+
+def test_ignoring_a_partner_keeps_the_main_player_as_solo(env):
+    eng, s = env
+    with eng.begin() as cx:
+        eid = store.get_event(cx, "ANGERS")["id"]
+        store.update_event(cx, eid, typeform_id="FORM1")
+        importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s)
+        lam = next(r for r in store.list_registrations(cx, eid) if r["nom"] == "Lam")
+        store.ignore_registration(cx, lam["id"])
+        importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s)
+        regs = {r["nom"]: r for r in store.list_registrations(cx, eid)}
+    assert set(regs) == {"Roy", "Vidal"} and regs["Roy"]["team"] == ""

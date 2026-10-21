@@ -474,6 +474,24 @@ def tab_people(cx, ev):
             for rid, status in changes:
                 store.set_invite_status(cx, rid, status)
             rerun(cx)
+    with st.expander("Ignorer une inscription (test, doublon…)"):
+        st.caption("L'inscription disparaît de la liste et des compteurs, et les prochaines synchronisations Typeform ne la recréent pas. "
+                   "Elle reste dans Typeform ; vous pouvez la rétablir.")
+        if regs:
+            opts = {r["id"]: f"{r['prenom']} {r['nom']} · {r['company'] or '—'} · {r['email'] or 'sans e-mail'}" for r in regs}
+            pick_id = st.selectbox("Inscription à ignorer", list(opts), format_func=lambda i: opts[i], key=f"ign-pick-{ev['id']}")
+            why = st.text_input("Motif (facultatif)", placeholder="ex. test", key=f"ign-why-{ev['id']}")
+            if st.button("Ignorer cette inscription", key=f"ign-go-{ev['id']}"):
+                store.ignore_registration(cx, int(pick_id), why)
+                flash("Inscription ignorée.")
+                rerun(cx)
+        for ig in store.list_ignored(cx, ev["id"]):
+            c1, c2 = st.columns([4, 1])
+            c1.write(f"🚫 {ig['label']}" + (f" — {ig['reason']}" if ig["reason"] else ""))
+            if c2.button("Rétablir", key=f"ign-undo-{ig['id']}"):
+                store.unignore(cx, ig["id"])
+                flash(f"{ig['label']} rétabli(e) : revient à la prochaine synchronisation.")
+                rerun(cx)
     with st.expander("Ajouter un participant"):
         with st.form(f"add-person-{ev['id']}", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)

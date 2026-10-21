@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import and_, delete, func, insert, select, update
 
-from .db import (action_log, automations, communications, events, pending, people, registrations, staff, sync_state,
+from .db import (action_log, automations, communications, events, ignored_signups, pending, people, registrations, staff, sync_state,
                  tasks, workflow_runs)
 from .util import base_task_name, norm
 
@@ -197,6 +197,39 @@ def reset_form_signups(cx, event_id: int, actor: str = "utilisateur") -> tuple[i
             n_people += cx.execute(delete(people).where(and_(people.c.id == pid, people.c.source == "formulaire"))).rowcount or 0
     log(cx, "reset_signups", event_id, f"{n_reg} inscription(s) du formulaire et {n_people} personne(s) supprimée(s)", actor)
     return n_reg, n_people
+
+
+def ignore_registration(cx, registration_id: int, reason: str = "", actor: str = "utilisateur") -> bool:
+    """Ignore une inscription (test, doublon…) : elle quitte la liste et les prochaines synchronisations ne la recréent pas.
+    La réponse reste dans Typeform ; « Rétablir » la fait revenir à la synchronisation suivante."""
+    row = cx.execute(select(registrations.c.id, registrations.c.event_id, registrations.c.person_id, people.c.pkey,
+                            people.c.prenom, people.c.nom, people.c.company, people.c.source).join(
+        people, people.c.id == registrations.c.person_id).where(registrations.c.id == registration_id)).mappings().first()
+    if not row:
+        return False
+    label = f"{row['prenom']} {row['nom']}".strip() or row["company"] or row["pkey"]
+    if not cx.execute(select(ignored_signups.c.id).where(and_(ignored_signups.c.event_id == row["event_id"],
+                                                              ignored_signups.c.pkey == row["pkey"]))).first():
+        cx.execute(insert(ignored_signups).values(event_id=row["event_id"], pkey=row["pkey"], label=label[:200],
+                                                  reason=reason[:200], created_at=now()))
+    cx.execute(delete(registrations).where(registrations.c.id == registration_id))
+    if row["source"] == "formulaire" and not cx.execute(
+            select(registrations.c.id).where(registrations.c.person_id == row["person_id"])).first():
+        cx.execute(delete(people).where(people.c.id == row["person_id"]))
+    log(cx, "signup_ignored", row["event_id"], f"{label} ignoré(e)" + (f" ({reason})" if reason else ""), actor)
+    return True
+
+
+def list_ignored(cx, event_id: int) -> list[dict]:
+    return [dict(r) for r in cx.execute(select(ignored_signups).where(
+        ignored_signups.c.event_id == event_id).order_by(ignored_signups.c.id)).mappings()]
+
+
+def unignore(cx, ignored_id: int, actor: str = "utilisateur") -> None:
+    row = cx.execute(select(ignored_signups).where(ignored_signups.c.id == ignored_id)).mappings().first()
+    if row:
+        cx.execute(delete(ignored_signups).where(ignored_signups.c.id == ignored_id))
+        log(cx, "signup_restored", row["event_id"], f"{row['label']} rétabli(e) (reviendra à la prochaine synchronisation)", actor)
 
 
 def set_poules(cx, event_id: int, mapping: dict[int, str], actor: str = "utilisateur") -> int:
