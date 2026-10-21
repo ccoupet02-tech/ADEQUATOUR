@@ -184,8 +184,14 @@ ignored_signups = Table(
     UniqueConstraint("event_id", "pkey", name="uq_ignored_signup"),
 )
 
+app_settings = Table(
+    "app_settings", metadata,
+    Column("key", String(60), primary_key=True),
+    Column("value", Text, default=""),
+)
+
 TABLES = [events, people, registrations, tasks, staff, communications, action_log, pending, automations,
-          workflow_runs, sync_state, ignored_signups]
+          workflow_runs, sync_state, ignored_signups, app_settings]
 
 
 def normalize_url(url: str) -> tuple[str, dict]:

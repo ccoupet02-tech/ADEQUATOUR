@@ -527,7 +527,9 @@ def tab_staff(cx, ev):
         if sm["other"]:
             table.append({"Rôle": "Autre (texte libre)", "Attribués": sm["other"], "Visés": "—", "Statut": "—"})
         st.dataframe(pd.DataFrame(table), hide_index=True)
-    with st.expander("Google Sheet d'inscription du staff", expanded=not ev["staff_sheet_url"]):
+    if store.get_setting(cx, "staff_typeform_id"):
+        st.caption("📝 Les réponses du formulaire Typeform du staff (choix « Événement » = " + ev["name"] + ") arrivent ici toutes les 15 minutes.")
+    with st.expander("Google Sheet d'inscription du staff", expanded=False):
         url = st.text_input("Lien du Google Sheet", value=ev["staff_sheet_url"] or "", key=f"ss-url-{ev['id']}",
                             placeholder="https://docs.google.com/spreadsheets/d/…",
                             help="Partagez le fichier : Partager → Accès général → « Tous les utilisateurs disposant du lien » (Lecteur). "
@@ -802,6 +804,46 @@ def page_settings(cx):
             st.caption(c.detail + ("" if c.developed else "  ·  Branchement non développé dans cette version."))
             if c.needs:
                 st.caption(f"À fournir : {c.needs}")
+    st.subheader("Formulaire Typeform du staff (tous les événements)")
+    st.caption("Un seul formulaire pour tout le staff : la question « Événement » (ville) range chaque réponse dans l'onglet Staff du bon événement.")
+    fid = st.text_input("Identifiant du formulaire staff", value=store.get_setting(cx, "staff_typeform_id"), key="stf-id",
+                        help="La fin de l'adresse du formulaire : https://xxx.typeform.com/to/IDENTIFIANT")
+    if fid.strip() != store.get_setting(cx, "staff_typeform_id") and st.button("Enregistrer l'identifiant du formulaire staff", key="stf-save"):
+        store.set_setting(cx, "staff_typeform_id", fid.strip())
+        rerun(cx)
+    if store.get_setting(cx, "staff_typeform_id") and not os.environ.get("TYPEFORM_TOKEN"):
+        st.warning("Aucun jeton Typeform (`TYPEFORM_TOKEN` dans les Secrets).")
+    elif store.get_setting(cx, "staff_typeform_id"):
+        from padel import staff_sheet
+        form_id = store.get_setting(cx, "staff_typeform_id")
+        evs = store.list_events(cx)
+        d1, d2, d3 = st.columns(3)
+        try:
+            if d1.button("Diagnostic du formulaire staff", key="stf-diag"):
+                cl = get_settings().typeform_client()
+                from padel.signups import typeform_rows  # noqa: F401
+                st.code("\n".join(staff_sheet.staff_typeform_diagnostic(cl.get_form(form_id), list(cl.iter_responses(form_id)), [e["name"] for e in evs])))
+            for col, label, dry in ((d2, "Simuler (tous les événements)", True), (d3, "Synchroniser (tous les événements)", False)):
+                if col.button(label, key=f"stf-{'sim' if dry else 'go'}"):
+                    cl, cache, lines = get_settings().typeform_client(), {}, []
+                    unknown: set[str] = set()
+                    for e in evs:
+                        r = staff_sheet.sync_staff_typeform(cx, e, cl, form_id, dry_run=dry, cache=cache, actor="utilisateur",
+                                                            event_names=[x["name"] for x in evs])
+                        unknown |= set(r["unknown"])
+                        if r["members"] or r["removed"]:
+                            lines.append(f"{e['name']} : {r['members']} inscrit(s) staff ({r['added']} ajouté(s), {r['updated']} mis à jour, {r['removed']} retiré(s))")
+                    msg = "\n".join(lines) or "Aucune réponse rattachée à un événement."
+                    if dry:
+                        st.info("Simulation :\n\n" + msg)
+                    else:
+                        flash(msg)
+                    if unknown:
+                        st.warning("Événement(s) non reconnu(s) dans les réponses : " + ", ".join(sorted(unknown)))
+                    if not dry:
+                        rerun(cx)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Typeform : {exc}")
     st.subheader("Automatisations")
     for a in store.list_automations(cx):
         c1, c2 = st.columns([4, 1])

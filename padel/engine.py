@@ -47,6 +47,7 @@ class EngineResult:
     skipped_existing: int = 0
     errors: int = 0
     notes: list[str] = field(default_factory=list)
+    cache: dict = field(default_factory=dict)      # lectures partagées entre événements d'un même passage (ex. formulaire staff)
 
     def summary(self) -> str:
         mode = "SIMULATION" if self.dry_run else "RÉEL"
@@ -137,7 +138,22 @@ def wf_staff_sheet(cx, settings: Settings, ev: dict, today: date, res: EngineRes
     return r["added"] + r["updated"] + r["removed"], 0
 
 
-WORKFLOWS = {"typeform": wf_typeform, "staff_sheet": wf_staff_sheet, "invitations": wf_invitations, "relances": wf_relances}
+def wf_staff_typeform(cx, settings: Settings, ev: dict, today: date, res: EngineResult) -> tuple[int, int]:
+    """Formulaire Typeform unique du staff : les réponses de cet événement alimentent son onglet Staff."""
+    form_id = store.get_setting(cx, "staff_typeform_id").strip()
+    if not form_id or not settings.env.get("TYPEFORM_TOKEN"):
+        return 0, 0   # rien à faire : on ne simule jamais une synchronisation
+    from .staff_sheet import sync_staff_typeform
+    r = sync_staff_typeform(cx, ev, settings.typeform_client(), form_id, cache=res.cache)
+    flagged = 0
+    for label in r["unknown"]:
+        flagged += store.add_pending(cx, f"staffevent:{label.lower()}", "donnee_manquante",
+                                     f"Inscription staff : événement « {label} » inconnu",
+                                     "Une réponse du formulaire staff cite un événement absent de la base : elle n'est rattachée à rien.")
+    return r["added"] + r["updated"] + r["removed"], flagged
+
+
+WORKFLOWS = {"typeform": wf_typeform, "staff_typeform": wf_staff_typeform, "staff_sheet": wf_staff_sheet, "invitations": wf_invitations, "relances": wf_relances}
 
 
 # ----------------------------------------------------------------------------- exécution

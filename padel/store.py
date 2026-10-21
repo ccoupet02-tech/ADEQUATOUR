@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import and_, delete, func, insert, select, update
 
-from .db import (action_log, automations, communications, events, ignored_signups, pending, people, registrations, staff, sync_state,
+from .db import (action_log, app_settings, automations, communications, events, ignored_signups, pending, people, registrations, staff, sync_state,
                  tasks, workflow_runs)
 from .util import base_task_name, norm
 
@@ -232,6 +232,19 @@ def unignore(cx, ignored_id: int, actor: str = "utilisateur") -> None:
         log(cx, "signup_restored", row["event_id"], f"{row['label']} rétabli(e) (reviendra à la prochaine synchronisation)", actor)
 
 
+def get_setting(cx, key: str, default: str = "") -> str:
+    row = cx.execute(select(app_settings.c.value).where(app_settings.c.key == key)).first()
+    return (row[0] or default) if row else default
+
+
+def set_setting(cx, key: str, value: str, actor: str = "utilisateur") -> None:
+    if cx.execute(select(app_settings.c.key).where(app_settings.c.key == key)).first():
+        cx.execute(update(app_settings).where(app_settings.c.key == key).values(value=value))
+    else:
+        cx.execute(insert(app_settings).values(key=key, value=value))
+    log(cx, "setting", None, f"{key} modifié", actor)
+
+
 def set_poules(cx, event_id: int, mapping: dict[int, str], actor: str = "utilisateur") -> int:
     """Écrit la poule de chaque inscription (id d'inscription -> « A », « B »…). Retourne le nombre modifié."""
     n = 0
@@ -404,6 +417,7 @@ DEFAULT_AUTOMATIONS = [
     ("relances", "Préparer les relances sans réponse (aperçu)"),
     ("typeform", "Récupérer les nouvelles inscriptions Typeform"),
     ("staff_sheet", "Relire le Google Sheet du staff"),
+    ("staff_typeform", "Récupérer les inscriptions du formulaire Typeform du staff"),
 ]
 MAX_ATTEMPTS = 3
 

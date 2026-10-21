@@ -80,3 +80,88 @@ def test_template_has_three_tabs_and_headers():
     assert wb.sheetnames == ["STAFF", "ROLE", "SYNTHÈSE"]
     members, _ = staff_sheet.parse_staff_csv("\n".join(",".join(str(c or "") for c in row) for row in wb["STAFF"].iter_rows(max_row=6, values_only=True)))
     assert members == []                       # modèle vide : en-têtes reconnues, aucune personne
+
+
+# ----------------------------------------------------------------------------- formulaire Typeform staff unique
+from tests.test_signups import FakeTF  # noqa: E402
+
+
+class StaffForm:
+    form = {"fields": [
+        {"id": "ev", "type": "dropdown", "title": "Quel événement ?"},
+        {"id": "g", "type": "contact_info", "title": "Vos coordonnées", "properties": {"fields": [
+            {"id": "fn", "type": "short_text", "title": "First name"}, {"id": "ln", "type": "short_text", "title": "Last name"}]}},
+        {"id": "sz", "type": "multiple_choice", "title": "Taille polo"},
+        {"id": "lu", "type": "multiple_choice", "title": "Déjeuner avant l’événement ?"},
+        {"id": "ro", "type": "short_text", "title": "Rôle souhaité"}]}
+
+    def __init__(self, responses):
+        self.responses = responses
+
+    def get_form(self, _):
+        return self.form
+
+    def iter_responses(self, _):
+        yield from self.responses
+
+
+def _r(when, event, first, last, size="M", lunch="Oui", role="Field lead"):
+    t = lambda i, v: {"field": {"id": i}, "type": "text", "text": v}  # noqa: E731
+    c = lambda i, v: {"field": {"id": i}, "type": "choice", "choice": {"label": v}}  # noqa: E731
+    return {"submitted_at": when, "answers": [c("ev", event), t("fn", first), t("ln", last), c("sz", size), c("lu", lunch), t("ro", role)]}
+
+
+def test_one_staff_form_routes_each_answer_to_its_event(env):
+    eng, bdx = env
+    with eng.begin() as cx:
+        lyon, _ = store.upsert_event(cx, "LYON", date=date(2026, 12, 3))
+        resp = [_r("2026-10-01T08:00:00Z", "Bordeaux", "Julie", "Martin"),
+                _r("2026-10-02T08:00:00Z", "LYON", "Paul", "Durand", "L", "Non", "Reception"),
+                _r("2026-10-03T08:00:00Z", "Bordeaux - 19 nov", "Ana", "Roy", "S"),
+                _r("2026-10-04T08:00:00Z", "Bordeaux", "Julie", "Martin", "XL", "Non", "Shuttle"),   # réponse plus récente : elle remplace
+                _r("2026-10-05T08:00:00Z", "Marseille", "Zoe", "Inconnue")]
+        cache = {}
+        for eid, name in ((bdx, "BORDEAUX"), (lyon, "LYON")):
+            ev = store.get_event(cx, eid)
+            r = staff_sheet.sync_staff_typeform(cx, ev, StaffForm(resp), "F1", cache=cache)
+            assert r["unknown"] == ["Marseille"]
+        b = {x["nom"]: x for x in store.list_staff(cx, bdx)}
+        l = {x["nom"]: x for x in store.list_staff(cx, lyon)}
+    assert set(b) == {"Martin", "Roy"} and b["Martin"]["role"] == "Shuttle" and b["Martin"]["shirt_size"] == "XL" and b["Martin"]["repas"] == "Non"
+    assert set(l) == {"Durand"} and l["Durand"]["role"] == "Reception"
+
+
+def test_staff_form_removal_and_manual_members_are_respected(env):
+    eng, bdx = env
+    with eng.begin() as cx:
+        cx.execute(staff_sheet.insert(staff_sheet.staff).values(event_id=bdx, nom="Manuel", prenom="Marc", source=""))
+        ev = store.get_event(cx, bdx)
+        two = [_r("2026-10-01T08:00:00Z", "Bordeaux", "Julie", "Martin"), _r("2026-10-02T08:00:00Z", "Bordeaux", "Ana", "Roy")]
+        staff_sheet.sync_staff_typeform(cx, ev, StaffForm(two), "F1")
+        assert len(store.list_staff(cx, bdx)) == 3
+        r = staff_sheet.sync_staff_typeform(cx, ev, StaffForm(two[:1]), "F1")     # Ana supprimée dans Typeform
+        assert r["removed"] == 1
+        assert {x["nom"] for x in store.list_staff(cx, bdx)} == {"Martin", "Manuel"}
+
+
+def test_engine_runs_staff_typeform_only_with_token_and_form(env, monkeypatch):
+    from padel import engine
+    eng, bdx = env
+    s = load_settings()
+    resp = [_r("2026-10-01T08:00:00Z", "Bordeaux", "Julie", "Martin")]
+    monkeypatch.setattr(type(s), "typeform_client", lambda self: StaffForm(resp))
+    with eng.begin() as cx:
+        store.set_setting(cx, "staff_typeform_id", "F1")
+    engine.run(eng, s, today=date(2026, 10, 20))
+    with eng.connect() as cx:
+        assert store.list_staff(cx, bdx) == []                 # pas de jeton : rien n'est simulé
+    s.env["TYPEFORM_TOKEN"] = "tfp_test"
+    res = engine.run(eng, s, today=date(2026, 10, 20))
+    with eng.connect() as cx:
+        assert [x["nom"] for x in store.list_staff(cx, bdx)] == ["Martin"]
+    assert res.errors == 0
+
+
+def test_staff_diagnostic_has_no_personal_data():
+    lines = "\n".join(staff_sheet.staff_typeform_diagnostic(StaffForm.form, [_r("2026-10-01T08:00:00Z", "Bordeaux", "Julie", "Martin")], ["BORDEAUX"]))
+    assert "Julie" not in lines and "Martin" not in lines and "BORDEAUX" in lines and "event" in lines
