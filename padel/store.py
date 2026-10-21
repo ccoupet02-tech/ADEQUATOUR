@@ -266,7 +266,7 @@ def set_invite_status(cx, registration_id: int, status: str, actor: str = "utili
 
 
 # ----------------------------------------------------------------------------- staff
-STAFF_FIELDS = ("nom", "prenom", "role", "shirt_size", "hotel", "transport", "repas")
+STAFF_FIELDS = ("nom", "prenom", "role", "shirt_size", "hotel", "transport", "repas")  # + « source » géré en interne
 
 
 def list_staff(cx, event_id: int) -> list[dict]:
@@ -275,17 +275,47 @@ def list_staff(cx, event_id: int) -> list[dict]:
 
 
 def save_staff(cx, event_id: int, rows: list[dict], actor: str = "utilisateur") -> int:
-    """Remplace la liste du staff de l'événement par celle de l'éditeur (lignes vides ignorées)."""
+    """Remplace la liste du staff de l'événement par celle de l'éditeur (lignes vides ignorées). Une ligne qui vient du
+    Google Sheet garde son origine (la synchro continue de la mettre à jour)."""
+    origin = {(norm(r["nom"]), norm(r["prenom"])): r.get("source") or "" for r in list_staff(cx, event_id)}
     clean = []
     for r in rows:
         item = {k: (str(r.get(k) or "").strip()) for k in STAFF_FIELDS}
         if any(item.values()):
+            item["source"] = origin.get((norm(item["nom"]), norm(item["prenom"])), "")
             clean.append(item)
     cx.execute(delete(staff).where(staff.c.event_id == event_id))
     for item in clean:
         cx.execute(insert(staff).values(event_id=event_id, **item))
     log(cx, "staff_saved", event_id, f"{len(clean)} membre(s)", actor)
     return len(clean)
+
+
+def staff_summary(rows: list[dict], roles: list[dict]) -> dict:
+    """Chiffres du staff : inscrits, déjeuners, tailles de polo et répartition par rôle (avec l'effectif visé)."""
+    names = {norm(r["name"]): r for r in roles}
+    by_role = {r["name"]: 0 for r in roles}
+    unassigned = other = lunch = 0
+    sizes: dict[str, int] = {}
+    for r in rows:
+        key = norm(r.get("role"))
+        if not key:
+            unassigned += 1
+        elif key in names:
+            by_role[names[key]["name"]] += 1
+        else:
+            hit = next((n for n in names if n in key), None)   # « Field lead (préféré) » -> Field lead
+            if hit:
+                by_role[names[hit]["name"]] += 1
+            else:
+                other += 1
+        if norm(r.get("repas")).startswith(("oui", "yes", "o")):
+            lunch += 1
+        if r.get("shirt_size"):
+            sizes[r["shirt_size"]] = sizes.get(r["shirt_size"], 0) + 1
+    return {"total": len(rows), "lunch": lunch, "sizes": sizes, "by_role": by_role,
+            "unassigned": unassigned, "other": other,
+            "targets": {r["name"]: r.get("target") for r in roles}}
 
 
 # ----------------------------------------------------------------------------- communications et validations
@@ -373,6 +403,7 @@ DEFAULT_AUTOMATIONS = [
     ("invitations", "Préparer les invitations dues (aperçu)"),
     ("relances", "Préparer les relances sans réponse (aperçu)"),
     ("typeform", "Récupérer les nouvelles inscriptions Typeform"),
+    ("staff_sheet", "Relire le Google Sheet du staff"),
 ]
 MAX_ATTEMPTS = 3
 

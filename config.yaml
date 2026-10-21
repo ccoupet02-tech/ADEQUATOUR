@@ -168,3 +168,19 @@ digest:
   grace_days: 14       # événements passés encore suivis (retour/recap...)
   soon_days: 7         # "à faire dans les X jours"
   max_items: 10
+
+
+# ----------------------------------------------------------------------------
+#  Staff : rôles (onglet « ROLE » du Google Sheet) et effectif visé par rôle (vide = non fixé)
+# ----------------------------------------------------------------------------
+staff:
+  roles:
+    - {name: Reception,          target: 3, description: "Distribue t-shirts, goodies et badges (DR + 1 ou 2 personnes)"}
+    - {name: Field lead,         target: 4, description: "Oriente les équipes vers les matchs ou ateliers ; clé de la fluidité"}
+    - {name: Shuttle,            target: 1, description: "Navettes gare / lieu ; a aussi un rôle dans le tournoi"}
+    - {name: Runner/timer,       target: 1, description: "Gère les points et le chronométrage"}
+    - {name: Challenge workshop, target: 2, description: "Anime le terrain pour les 3 mini-jeux"}
+    - {name: AI workshop,        target: null, description: "Animateurs nommés"}
+    - {name: D&I workshop,       target: null, description: "Responsable à définir"}
+    - {name: QVT workshop,       target: null, description: "Responsable à définir"}
+    - {name: Companion,          target: null, description: "Vente, accompagnement client, joueurs en renfort"}

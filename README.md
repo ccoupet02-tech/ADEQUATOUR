@@ -36,6 +36,7 @@ uniquement pour reprendre les données.
 | Typeform en direct (synchro à la demande + moteur toutes les 15 min) | ✅ code testé avec un faux Typeform ; à valider avec votre jeton |
 | Inscriptions du formulaire (export CSV du Google Sheet) : solo ou équipe de 2, niveau, e-mails, téléphones, enjeux ; poules ; étiquettes Word Avery L7160 ; export des équipes | ✅ fiche événement → Participants / Documents (exemple fictif : `examples/inscriptions-angers-exemple.csv`) |
 | Saisie des équipes dans adequat-padel-tour.com | ⏳ en attente du format accepté par l’outil (export CSV/Excel fourni en attendant) |
+| Staff : lecture d’un Google Sheet partagé par lien (synchro 15 min), compteurs par rôle, modèle de fichier | ✅ testé sur un export type ; à valider avec vos fichiers (Bordeaux, Lyon, Orléans) |
 | Message Teams à chaque inscription | ⏳ plus tard (nécessite les droits Microsoft) |
 | Classification des réponses par Claude | ⏳ après Outlook |
 | Comptes séparés par utilisateur | ❌ un seul mot de passe |

@@ -507,7 +507,67 @@ def tab_people(cx, ev):
 
 
 def tab_staff(cx, ev):
+    from padel import staff_sheet
+    from padel.staff_template import staff_template_xlsx
+    settings = get_settings()
+    roles = settings.get("staff", "roles", default=[]) or []
     rows = store.list_staff(cx, ev["id"])
+    sm = store.staff_summary(rows, roles)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Inscrits staff", sm["total"])
+    c2.metric("Déjeuner : oui", sm["lunch"])
+    c3.metric("Rôle à attribuer", sm["unassigned"], help="Inscrits dont la colonne « Rôle » est vide")
+    c4.metric("Polos", sum(sm["sizes"].values()), help=", ".join(f"{k} : {v}" for k, v in sorted(sm["sizes"].items())) or "Aucune taille renseignée")
+    if roles and rows:
+        table = []
+        for r in roles:
+            got, want = sm["by_role"][r["name"]], r.get("target")
+            table.append({"Rôle": r["name"], "Attribués": got, "Visés": "—" if want is None else want,
+                          "Statut": "—" if want is None else ("✅ complet" if got >= want else f"🟠 manque {want - got}")})
+        if sm["other"]:
+            table.append({"Rôle": "Autre (texte libre)", "Attribués": sm["other"], "Visés": "—", "Statut": "—"})
+        st.dataframe(pd.DataFrame(table), hide_index=True)
+    with st.expander("Google Sheet d'inscription du staff", expanded=not ev["staff_sheet_url"]):
+        url = st.text_input("Lien du Google Sheet", value=ev["staff_sheet_url"] or "", key=f"ss-url-{ev['id']}",
+                            placeholder="https://docs.google.com/spreadsheets/d/…",
+                            help="Partagez le fichier : Partager → Accès général → « Tous les utilisateurs disposant du lien » (Lecteur). "
+                                 "L'app ne fait que le lire.")
+        if url.strip() != (ev["staff_sheet_url"] or "") and st.button("Enregistrer le lien", key=f"ss-save-{ev['id']}"):
+            try:
+                staff_sheet.parse_sheet_url(url)
+                store.update_event(cx, ev["id"], staff_sheet_url=url.strip())
+                rerun(cx)
+            except staff_sheet.SheetError as exc:
+                st.error(str(exc))
+        if ev["staff_sheet_url"]:
+            b1, b2 = st.columns(2)
+            for col, label, dry in ((b1, "Simuler la synchronisation", True), (b2, "Synchroniser maintenant", False)):
+                if col.button(label, key=f"ss-{'sim' if dry else 'go'}-{ev['id']}"):
+                    try:
+                        r = staff_sheet.sync_staff(cx, ev["id"], staff_sheet.fetch_csv(ev["staff_sheet_url"]), dry_run=dry, actor="utilisateur")
+                        msg = (f"{r['members']} personne(s) dans le fichier : {r['added']} ajoutée(s), {r['updated']} mise(s) à jour, "
+                               f"{r['removed']} retirée(s).")
+                        if dry:
+                            st.info("Simulation : " + msg)
+                            for w in r["warnings"]:
+                                st.warning(w)
+                        else:
+                            st.session_state[f"ss-last-{ev['id']}"] = (f"{datetime.now():%H:%M:%S} · " + msg, r["warnings"])
+                            flash(msg)
+                            rerun(cx)
+                    except staff_sheet.SheetError as exc:
+                        st.error(str(exc))
+            last = st.session_state.get(f"ss-last-{ev['id']}")
+            if last:
+                st.info("Dernière synchronisation : " + last[0])
+                for w in last[1]:
+                    st.warning(w)
+            st.caption("Une fois le lien enregistré, le moteur relit le fichier toutes les 15 minutes : ajouts, changements de rôle, de polo ou de déjeuner. "
+                       "Les membres ajoutés à la main ci-dessous ne sont jamais supprimés.")
+        st.download_button("⬇ Modèle de fichier staff (à importer dans Google Drive)",
+                           staff_template_xlsx(ev["name"], ev["date"], ev["venue"] or "", roles),
+                           file_name=f"STAFF-{slug(ev['name'])}.xlsx", key=f"ss-tpl-{ev['id']}",
+                           help="Drive → Nouveau → Importer un fichier → ouvrir avec Google Sheets → Partager par lien (Lecteur) → coller le lien ici.")
     df = pd.DataFrame(rows or [{k: "" for k in store.STAFF_FIELDS}], columns=list(store.STAFF_FIELDS))
     labels = {"nom": "Nom", "prenom": "Prénom", "role": "Rôle", "shirt_size": "Taille t-shirt", "hotel": "Hôtel",
               "transport": "Transport", "repas": "Repas"}

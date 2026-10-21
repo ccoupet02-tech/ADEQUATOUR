@@ -127,7 +127,17 @@ def wf_typeform(cx, settings: Settings, ev: dict, today: date, res: EngineResult
     return rep.created, flagged
 
 
-WORKFLOWS = {"typeform": wf_typeform, "invitations": wf_invitations, "relances": wf_relances}
+def wf_staff_sheet(cx, settings: Settings, ev: dict, today: date, res: EngineResult) -> tuple[int, int]:
+    """Relit le Google Sheet du staff de l'événement (lecture seule, partagé par lien)."""
+    url = (ev.get("staff_sheet_url") or "").strip()
+    if not url:
+        return 0, 0
+    from .staff_sheet import fetch_csv, sync_staff
+    r = sync_staff(cx, ev["id"], fetch_csv(url))
+    return r["added"] + r["updated"] + r["removed"], 0
+
+
+WORKFLOWS = {"typeform": wf_typeform, "staff_sheet": wf_staff_sheet, "invitations": wf_invitations, "relances": wf_relances}
 
 
 # ----------------------------------------------------------------------------- exécution

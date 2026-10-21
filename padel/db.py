@@ -34,7 +34,8 @@ events = Table(
     Column("contact_email", String(200), default=""),
     Column("notes", Text, default=""),
     Column("report", Text, default=""),                # bilan post-événement
-    Column("typeform_id", String(60), default=""),     # identifiant du formulaire Typeform d'inscription
+    Column("typeform_id", String(60), default=""),
+    Column("staff_sheet_url", String(500), default=""),  # Google Sheet d'inscription du staff (lu par lien de partage)     # identifiant du formulaire Typeform d'inscription
     Column("created_at", DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)),
 )
 
@@ -98,6 +99,7 @@ staff = Table(
     Column("hotel", String(120), default=""),
     Column("transport", String(120), default=""),
     Column("repas", String(120), default=""),
+    Column("source", String(20), default=""),          # « sheet » = lu depuis le Google Sheet (mis à jour par la synchro)
 )
 
 communications = Table(
