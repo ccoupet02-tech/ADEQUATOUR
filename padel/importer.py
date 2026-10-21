@@ -12,10 +12,10 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import and_, delete, select, update
 
 from . import store
-from .db import people
+from .db import people, registrations
 from .config import Settings
 from .util import base_task_name, norm
 
@@ -228,9 +228,12 @@ def import_participants(cx, source, default_event: str | None = None, settings: 
 
 
 # ----------------------------------------------------------------------------- inscriptions (formulaire)
-def import_signups(cx, source, event: str, settings: Settings | None = None, dry_run: bool = False) -> Report:
+def import_signups(cx, source, event: str, settings: Settings | None = None, dry_run: bool = False,
+                   mirror: bool = False) -> Report:
     """Importe l'export du formulaire (Google Sheet / Typeform). Une ligne = 1 inscrit ou 2 joueurs en équipe.
-    Rejouable sans doublon : une personne déjà connue est complétée, jamais dupliquée."""
+    Rejouable sans doublon : une personne déjà connue est complétée, jamais dupliquée.
+    mirror=True (synchro Typeform) : la base reflète exactement le formulaire — la dernière inscription d'une personne
+    remplace les anciennes, et les inscriptions « formulaire » qui n'y figurent plus (réponse supprimée) sont retirées."""
     from .signups import parse_signups
     rep = Report("Inscriptions")
     ev = store.get_event(cx, event)
@@ -240,8 +243,11 @@ def import_signups(cx, source, event: str, settings: Settings | None = None, dry
     signups, warns, _ = parse_signups(source if isinstance(source, list) else read_rows(source), settings)
     rep.warnings.extend(warns)
     teams = solos = 0
+    keep_ids: set[int] = set()
+    keep_keys: set[str] = set()
     for s in signups:
         for p in s["players"]:
+            keep_keys.add(store.person_key(p["prenom"], p["nom"], p["email"], p["company"]))
             if dry_run:
                 known = cx.execute(select(people.c.id).where(people.c.pkey == store.person_key(
                     p["prenom"], p["nom"], p["email"], p["company"]))).first()
@@ -250,13 +256,30 @@ def import_signups(cx, source, event: str, settings: Settings | None = None, dry
                 continue
             pid, _ = store.upsert_person(cx, prenom=p["prenom"], nom=p["nom"], email=p["email"], phone=_clean_phone(p["phone"]),
                                          company=p["company"], position=p.get("position", ""), source="formulaire")
-            _, new = store.upsert_registration(
+            keep_ids.add(pid)
+            rid, new = store.upsert_registration(
                 cx, ev["id"], pid, type=p["type"] or "Tournoi", team=s["team"], size=p["size"], level=p["level"],
                 stakes=s["stakes"], registered_at=s["registered_at"], source="formulaire", invite_status="accepte")
+            if mirror and not new:   # la dernière inscription fait foi, y compris pour l'équipe (même vide)
+                cx.execute(update(registrations).where(registrations.c.id == rid).values(
+                    team=s["team"], level=p["level"] or None, stakes=s["stakes"], type=p["type"] or "Tournoi",
+                    registered_at=s["registered_at"] or registrations.c.registered_at))
             rep.created += new
             rep.updated += not new
         teams += len(s["players"]) == 2
         solos += len(s["players"]) == 1
+    if mirror and signups:
+        stale = [r for r in cx.execute(select(registrations.c.id, registrations.c.person_id, people.c.pkey).join(
+            people, people.c.id == registrations.c.person_id).where(and_(
+                registrations.c.event_id == ev["id"], registrations.c.source == "formulaire"))).mappings()
+            if r["pkey"] not in keep_keys]
+        if stale and not dry_run:
+            cx.execute(delete(registrations).where(registrations.c.id.in_([r["id"] for r in stale])))
+            cx.execute(delete(people).where(and_(people.c.source == "formulaire", people.c.id.in_([r["person_id"] for r in stale]),
+                                                 people.c.id.not_in(select(registrations.c.person_id)))))
+        if stale:
+            rep.warnings.append(f"{len(stale)} ancienne(s) inscription(s) du formulaire " + ("seraient retirées" if dry_run else "retirées")
+                                + " (remplacées par une inscription plus récente ou réponse supprimée dans Typeform).")
     rep.warnings.insert(0, f"{teams} équipe(s) de 2 · {solos} inscrit(s) seul(s)")
     if not dry_run:
         store.log(cx, "import_signups", ev["id"], rep.line() + f" ({teams} équipes, {solos} solos)", "import")
@@ -276,7 +299,7 @@ def sync_typeform(cx, event: str, client, settings: Settings | None = None, dry_
     if not rows:
         rep.warnings.append("Aucune réponse complète sur ce formulaire pour l'instant.")
         return rep
-    return import_signups(cx, rows, event, settings, dry_run=dry_run)
+    return import_signups(cx, rows, event, settings, dry_run=dry_run, mirror=True)
 
 
 # ----------------------------------------------------------------------------- staff

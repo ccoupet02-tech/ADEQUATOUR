@@ -270,3 +270,38 @@ def test_purge_then_resync_replaces_wrong_rows_but_keeps_manual_entries(env):
         importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s)
         regs = store.list_registrations(cx, eid)
     assert {r["nom"] for r in regs} == {"Roy", "Lam", "Vidal", "Saisi"} and not any(r["email"] == "vieux@x.fr" for r in regs)
+
+
+def test_latest_signup_wins_and_sync_mirrors_typeform(env):
+    """Même prénom+nom inscrit deux fois : la dernière compte. Une réponse supprimée dans Typeform disparaît à la synchro."""
+    eng, s = env
+    with eng.begin() as cx:
+        store.update_event(cx, store.get_event(cx, "ANGERS")["id"], typeform_id="FORM1")
+        importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s)
+    again = RESPONSES + [_resp("t3", "2026-10-05T10:00:00Z", prenom="chloe", nom="VIDAL", mail="chloe@ex.fr", ent="Beta", niv="Confirmé",
+                               pp="Dan", pn="Eux", pm="dan@ex.fr")]
+    with eng.begin() as cx:
+        sim = importer.sync_typeform(cx, "ANGERS", FakeTF(again), s, dry_run=True)
+        assert any("plusieurs fois" in w for w in sim.warnings)
+        importer.sync_typeform(cx, "ANGERS", FakeTF(again), s)
+        regs = store.list_registrations(cx)
+    names = sorted((r["prenom"].lower(), r["nom"].lower()) for r in regs)
+    assert names == [("alice", "roy"), ("bruno", "lam"), ("chloé", "vidal"), ("dan", "eux")] or \
+        sorted(n[1] for n in names) == ["eux", "lam", "roy", "vidal"]
+    chloe = [r for r in regs if r["nom"].lower() == "vidal"]
+    assert len(chloe) == 1 and chloe[0]["team"] == "Eux / VIDAL" or chloe[0]["team"].lower() == "eux / vidal"
+    assert chloe[0]["level"] == "Confirmé"
+    # la réponse d'Alice (+ Bruno) est supprimée dans Typeform -> retirée du dashboard à la synchro suivante
+    with eng.begin() as cx:
+        importer.sync_typeform(cx, "ANGERS", FakeTF([RESPONSES[1], again[2]]), s)
+        left = sorted(r["nom"].lower() for r in store.list_registrations(cx))
+    assert left == ["eux", "vidal"]
+
+
+def test_dedup_rules_unit():
+    rows = [{"submitted_at": "2026-10-01 08:00:00", "prenom": "Ana", "nom": "Diaz", "email": "a@x.fr",
+             "prenom du collaborateur": "Bob", "nom du collaborateur": "Ray"},
+            {"submitted_at": "2026-10-02 08:00:00", "prenom": "Bob", "nom": "Ray", "email": "b@x.fr"},   # Bob se réinscrit seul
+            {"submitted_at": "2026-10-03 08:00:00", "prenom": "Ana", "nom": "Diaz", "email": "a2@x.fr"}]  # Ana aussi (autre e-mail)
+    out, warns, _ = parse_signups(rows, load_settings())
+    assert [[p["prenom"] for p in e["players"]] for e in out] == [["Bob"], ["Ana"]] and len(warns) >= 1

@@ -41,6 +41,38 @@ def _when(text: str) -> datetime | None:
     return None
 
 
+def _who(p: dict) -> str:
+    """Identité d'un joueur pour détecter les doublons : prénom + nom (sans accents ni casse) ; à défaut, l'e-mail."""
+    return norm(f"{p['prenom']} {p['nom']}") or (p.get("email") or "")
+
+
+def _keep_latest(entries: list[dict], warnings: list[str]) -> list[dict]:
+    """Règle des doublons : une personne qui s'inscrit plusieurs fois (même prénom + nom) ne compte qu'une fois, avec sa
+    DERNIÈRE inscription. Une ancienne inscription dont le participant principal a été réinscrit est ignorée ; si seul le
+    coéquipier a été réinscrit ailleurs, il est retiré de l'ancienne équipe (le principal redevient seul)."""
+    if all(e["registered_at"] for e in entries):
+        entries = sorted(entries, key=lambda e: (e["registered_at"], e["line"]))
+    taken: dict[str, int] = {}            # identité -> ligne de l'inscription retenue (la plus récente)
+    kept: list[dict] = []
+    for e in reversed(entries):           # de la plus récente à la plus ancienne
+        main = e["players"][0]
+        if _who(main) in taken:
+            who = f"{main['prenom']} {main['nom']}".strip()
+            warnings.append(f"« {who} » est inscrit(e) plusieurs fois : la dernière inscription (ligne {taken[_who(main)]}) "
+                            f"remplace celle de la ligne {e['line']}.")
+            continue
+        if len(e["players"]) == 2 and _who(e["players"][1]) in taken:
+            partner = e["players"][1]
+            warnings.append(f"« {partner['prenom']} {partner['nom']} » s'est réinscrit(e) ailleurs (ligne "
+                            f"{taken[_who(partner)]}) : retiré(e) de l'équipe de la ligne {e['line']}.")
+            e = {**e, "players": e["players"][:1], "team": ""}
+        for p in e["players"]:
+            taken[_who(p)] = e["line"]
+        kept.append(e)
+    kept.reverse()
+    return kept
+
+
 def parse_signups(rows: list[dict], settings: Settings | None = None) -> tuple[list[dict], list[str], dict]:
     """Lignes du CSV (clés = intitulés normalisés) -> inscriptions.
 
@@ -94,6 +126,7 @@ def parse_signups(rows: list[dict], settings: Settings | None = None) -> tuple[l
                 warnings.append(f"ligne {i} : pas d'e-mail pour {p['prenom']} {p['nom']}.")
         out.append({"line": i, "players": players, "team": team, "stakes": g("stakes"),
                     "registered_at": _when(g("submitted"))})
+    out = _keep_latest(out, warnings)
     seen: dict[str, int] = {}
     for s in out:  # deux équipes de même nom (homonymes) : suffixe pour ne pas les confondre
         if s["team"]:
