@@ -71,6 +71,7 @@ registrations = Table(
     Column("source", String(60), default=""),
     Column("stakes", Text, default=""),                # enjeux / attentes indiqués dans le formulaire
     Column("registered_at", DateTime),                 # horodatage de l'inscription (formulaire)
+    Column("locked", String(200), default=""),         # champs modifiés à la main (ex. « level,type ») : la synchro ne les écrase plus
     UniqueConstraint("event_id", "person_id", name="uq_registration"),
 )
 

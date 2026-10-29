@@ -272,13 +272,19 @@ def import_signups(cx, source, event: str, settings: Settings | None = None, dry
             pid, _ = store.upsert_person(cx, prenom=p["prenom"], nom=p["nom"], email=p["email"], phone=_clean_phone(p["phone"]),
                                          company=p["company"], position=p.get("position", ""), source="formulaire")
             keep_ids.add(pid)
+            locked = store.registration_locks(cx, ev["id"], pid)   # champs modifiés à la main : la synchro n'y touche pas
+            wanted = dict(type=p["type"] or "Tournoi", team=s["team"], size=p["size"], level=p["level"], stakes=s["stakes"],
+                          invite_status="accepte")
             rid, new = store.upsert_registration(
-                cx, ev["id"], pid, type=p["type"] or "Tournoi", team=s["team"], size=p["size"], level=p["level"],
-                stakes=s["stakes"], registered_at=s["registered_at"], source="formulaire", invite_status="accepte")
+                cx, ev["id"], pid, registered_at=s["registered_at"], source="formulaire",
+                **{k: v for k, v in wanted.items() if k not in locked})
             if mirror and not new:   # la dernière inscription fait foi, y compris pour l'équipe (même vide)
-                cx.execute(update(registrations).where(registrations.c.id == rid).values(
-                    team=s["team"], level=p["level"] or None, stakes=s["stakes"], type=p["type"] or "Tournoi",
-                    registered_at=s["registered_at"] or registrations.c.registered_at))
+                vals = {k: v for k, v in dict(team=s["team"], level=p["level"] or None, stakes=s["stakes"],
+                                              type=p["type"] or "Tournoi").items() if k not in locked}
+                if vals:
+                    cx.execute(update(registrations).where(registrations.c.id == rid).values(**vals))
+                if s["registered_at"]:
+                    cx.execute(update(registrations).where(registrations.c.id == rid).values(registered_at=s["registered_at"]))
             rep.created += new
             rep.updated += not new
         teams += len(s["players"]) == 2

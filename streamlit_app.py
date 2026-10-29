@@ -411,17 +411,72 @@ def _people_views(cx, ev, regs):
                 view = view[view[col].isin(chosen)]
         if len(view) != len(df):
             st.caption(f"{len(view)} ligne(s) sur {len(df)}.")
-        sig = abs(hash((query, tuple(sorted((k, tuple(v)) for k, v in picks.items())), tuple(shown))))  # l'éditeur repart à zéro si la vue change
-        edited = st.data_editor(view, hide_index=True, key=f"regs-{ev['id']}-{sig}", column_order=[c for c in shown],
-                                disabled=[c for c in df.columns if c != "Invitation"],
-                                column_config={"Invitation": st.column_config.SelectboxColumn("Invitation", options=list(INVITE_LABELS.values()), required=True)})
+        st.caption("✏️ Cliquez dans une cellule pour la modifier ; la ligne vide en bas du tableau (ou le « + ») ajoute un participant ; "
+                   "sélectionnez une ligne puis la corbeille pour la retirer. Rien n'est enregistré avant « Enregistrer ». "
+                   "Vos modifications ne sont plus écrasées par la synchronisation Typeform.")
+        sig = abs(hash((query, tuple(sorted((k, tuple(v)) for k, v in picks.items())), tuple(shown), len(regs))))
+        types = sorted({"Tournoi", "Initiation", "Cocktail", *[t for t in df["Type"] if t]})
+        sizes = ["XS", "S", "M", "L", "XL", "XXL"]
+        edited = st.data_editor(
+            view, hide_index=True, num_rows="dynamic", key=f"regs-{ev['id']}-{sig}", column_order=list(shown),
+            disabled=["id", "Équipe"],
+            column_config={"Invitation": st.column_config.SelectboxColumn("Invitation", options=list(INVITE_LABELS.values())),
+                           "Type": st.column_config.SelectboxColumn("Type", options=types),
+                           "T-shirt": st.column_config.SelectboxColumn("T-shirt", options=sizes),
+                           "Enjeux": st.column_config.TextColumn("Enjeux", width="large")})
         back = {v: k for k, v in INVITE_LABELS.items()}
-        cur = {r["id"]: r["invite_status"] for r in regs}
-        changes = [(int(r["id"]), back[r["Invitation"]]) for _, r in edited.iterrows() if back[r["Invitation"]] != cur[int(r["id"])]]
-        if changes and st.button(f"Enregistrer {len(changes)} statut(s)", key=f"save-regs-{ev['id']}"):
-            for rid, status in changes:
-                store.set_invite_status(cx, rid, status)
-            rerun(cx)
+        by_id = {int(r["id"]): r for _, r in view.iterrows()}
+        clean = lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v).strip()  # noqa: E731
+        person_cols = {"Prénom": "prenom", "Nom": "nom", "Entreprise": "company", "E-mail": "email", "Téléphone": "phone"}
+        reg_cols = {"Type": "type", "Niveau": "level", "Enjeux": "stakes", "Poule": "poule", "T-shirt": "size"}
+        edits, adds, kept = [], [], set()
+        for _, r in edited.iterrows():
+            if pd.isna(r.get("id")):
+                if clean(r["Prénom"]) or clean(r["Nom"]) or clean(r["Entreprise"]):
+                    adds.append(r)
+                continue
+            rid = int(r["id"])
+            kept.add(rid)
+            old = by_id.get(rid)
+            if old is None:
+                continue
+            person = {f: clean(r[c]) for c, f in person_cols.items() if clean(r[c]) != clean(old[c])}
+            reg = {f: clean(r[c]) for c, f in reg_cols.items() if clean(r[c]) != clean(old[c])}
+            status = back.get(clean(r["Invitation"])) if clean(r["Invitation"]) != clean(old["Invitation"]) else None
+            if person or reg or status:
+                edits.append((rid, person, reg, status))
+        removed = [rid for rid in by_id if rid not in kept]
+        if edits or adds or removed:
+            st.info(f"À enregistrer : {len(edits)} modification(s), {len(adds)} ajout(s), {len(removed)} retrait(s).")
+            ok_rm = True
+            if removed:
+                ok_rm = st.checkbox(f"Je confirme le retrait de {len(removed)} inscription(s) (venues du formulaire : ignorées ; saisies à la main : supprimées)",
+                                    key=f"rm-ok-{ev['id']}-{sig}")
+            if st.button("Enregistrer les modifications", key=f"save-regs-{ev['id']}", disabled=not ok_rm):
+                for rid, person, reg, status in edits:
+                    store.update_participant(cx, rid, person, {**reg, **({"invite_status": status} if status else {})})
+                for r in adds:
+                    store.add_participant(cx, ev["id"], invite_status=back.get(clean(r["Invitation"]), "a_inviter"),
+                                          prenom=clean(r["Prénom"]), nom=clean(r["Nom"]), company=clean(r["Entreprise"]),
+                                          email=clean(r["E-mail"]), phone=clean(r["Téléphone"]), type=clean(r["Type"]) or "Tournoi",
+                                          level=clean(r["Niveau"]), stakes=clean(r["Enjeux"]), poule=clean(r["Poule"]), size=clean(r["T-shirt"]))
+                for rid in removed:
+                    store.remove_registration(cx, rid)
+                flash(f"{len(edits)} modification(s), {len(adds)} ajout(s), {len(removed)} retrait(s) enregistré(s).")
+                rerun(cx)
+        with st.expander("Former ou défaire une équipe à la main"):
+            opts = {r["id"]: f"{r['prenom']} {r['nom']} · {r['company'] or '—'} · {label(r)}" for r in regs}
+            duo = st.multiselect("Deux joueurs à réunir en équipe", list(opts), format_func=lambda i: opts[i], max_selections=2, key=f"duo-{ev['id']}")
+            c1, c2 = st.columns(2)
+            if c1.button("Former l'équipe", key=f"duo-go-{ev['id']}", disabled=len(duo) != 2):
+                a_, b_ = (next(r for r in regs if r["id"] == i) for i in duo)
+                store.set_team(cx, duo, f"{a_['nom'] or a_['prenom']} / {b_['nom'] or b_['prenom']}")
+                flash("Équipe formée.")
+                rerun(cx)
+            if c2.button("Défaire l'équipe des joueurs sélectionnés", key=f"duo-undo-{ev['id']}", disabled=not duo):
+                store.set_team(cx, duo, "")
+                flash("Équipe défaite (les joueurs redeviennent seuls).")
+                rerun(cx)
     with v_teams:
         rows = [{"Équipe": names[r["id"]], "Nom": r["nom"], "Prénom": r["prenom"], "Entreprise": r["company"]}
                 for r in sorted(regs, key=lambda r: (r["id"] if r["id"] in names else 10**9)) if r["id"] in names]

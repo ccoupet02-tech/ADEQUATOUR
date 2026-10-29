@@ -171,6 +171,77 @@ def list_registrations(cx, event_id: int | None = None) -> list[dict]:
     return rows
 
 
+LOCKABLE = ("type", "level", "stakes", "size", "team", "invite_status")
+PERSON_FIELDS = ("prenom", "nom", "company", "email", "phone")
+
+
+def registration_locks(cx, event_id: int, person_id: int) -> set[str]:
+    row = cx.execute(select(registrations.c.locked).where(and_(registrations.c.event_id == event_id,
+                                                               registrations.c.person_id == person_id))).first()
+    return {x for x in (row[0] or "").split(",") if x} if row else set()
+
+
+def update_participant(cx, reg_id: int, person: dict | None = None, reg: dict | None = None, actor: str = "utilisateur") -> None:
+    """Modification manuelle d'une inscription. Les champs d'inscription modifiés sont verrouillés (la synchro ne les écrase plus) ;
+    la clé de rapprochement de la personne ne change pas, donc la synchro la retrouve."""
+    row = cx.execute(select(registrations).where(registrations.c.id == reg_id)).mappings().first()
+    if not row:
+        return
+    person = {k: (v or "").strip() for k, v in (person or {}).items() if k in PERSON_FIELDS}
+    reg = {k: ((v or "").strip() if isinstance(v, str) or v is None else v) for k, v in (reg or {}).items()}
+    if person:
+        cx.execute(update(people).where(people.c.id == row["person_id"]).values(**person))
+    status = reg.pop("invite_status", None)
+    locks = {x for x in (row["locked"] or "").split(",") if x}
+    vals = {k: v for k, v in reg.items() if k in ("type", "level", "stakes", "size", "team", "poule")}
+    locks |= {k for k in vals if k in LOCKABLE}
+    if status:
+        locks.add("invite_status")
+    if vals or status:
+        cx.execute(update(registrations).where(registrations.c.id == reg_id).values(locked=",".join(sorted(locks)), **vals))
+    if status:
+        set_invite_status(cx, reg_id, status, actor)
+    log(cx, "participant_edit", row["event_id"], f"inscription {reg_id} modifiée ({', '.join(sorted({*person, *vals, *(['invite_status'] if status else [])}))})", actor)
+
+
+def add_participant(cx, event_id: int, actor: str = "utilisateur", invite_status: str = "a_inviter", **f) -> int:
+    """Ajout manuel (source « saisie ») : jamais supprimé par une synchronisation."""
+    person = {k: (f.get(k) or "").strip() for k in PERSON_FIELDS}
+    pid, _ = upsert_person(cx, source="saisie", **person)
+    rid, _ = upsert_registration(cx, event_id, pid, type=(f.get("type") or "Tournoi"), level=(f.get("level") or ""),
+                                 stakes=(f.get("stakes") or ""), size=(f.get("size") or ""), poule=(f.get("poule") or ""),
+                                 team=(f.get("team") or ""), source="saisie", invite_status=invite_status)
+    log(cx, "person_added", event_id, f"{person['prenom']} {person['nom']}".strip(), actor)
+    return rid
+
+
+def remove_registration(cx, reg_id: int, actor: str = "utilisateur") -> str:
+    """Retire une inscription du tableau. Une inscription venue du formulaire est « ignorée » (sinon la synchro la recréerait) ;
+    une saisie manuelle est supprimée. Retourne « ignoree » ou « supprimee »."""
+    row = cx.execute(select(registrations.c.source, registrations.c.event_id, registrations.c.person_id).where(
+        registrations.c.id == reg_id)).mappings().first()
+    if not row:
+        return "supprimee"
+    if row["source"] == "formulaire":
+        ignore_registration(cx, reg_id, "retirée du tableau", actor)
+        return "ignoree"
+    cx.execute(delete(registrations).where(registrations.c.id == reg_id))
+    if not cx.execute(select(registrations.c.id).where(registrations.c.person_id == row["person_id"])).first():
+        cx.execute(delete(people).where(and_(people.c.id == row["person_id"], people.c.source == "saisie")))
+    log(cx, "person_removed", row["event_id"], f"inscription {reg_id} supprimée", actor)
+    return "supprimee"
+
+
+def set_team(cx, reg_ids: list[int], team: str, actor: str = "utilisateur") -> None:
+    """Forme (team non vide) ou défait (team vide) une équipe à la main ; le choix est verrouillé face à la synchro."""
+    for rid in reg_ids:
+        row = cx.execute(select(registrations.c.locked, registrations.c.event_id).where(registrations.c.id == rid)).first()
+        if row:
+            locks = {x for x in (row[0] or "").split(",") if x} | {"team"}
+            cx.execute(update(registrations).where(registrations.c.id == rid).values(team=team, locked=",".join(sorted(locks))))
+            log(cx, "team_set", row[1], f"inscription {rid} : équipe « {team or '(aucune)'} »", actor)
+
+
 def team_names(regs: list[dict]) -> dict[int, str]:
     """id d'inscription -> nom d'équipe affiché : le nom de l'ENTREPRISE ; si deux équipes ont la même entreprise,
     la 2e s'appelle « Entreprise 2 », la 3e « Entreprise 3 »… (ordre d'inscription). Les inscrits seuls n'en ont pas."""
