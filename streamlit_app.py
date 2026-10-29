@@ -10,6 +10,7 @@ from __future__ import annotations
 import hmac
 import io
 import os
+import re
 import zipfile
 from datetime import datetime, date
 
@@ -321,7 +322,7 @@ def page_event(cx, event_id: int):
         return
     j = f" · J-{(ev['date'] - TODAY).days}" if ev["date"] and ev["date"] >= TODAY else ""
     st.markdown(f"### {ev['name']} · {fr_date(ev['date'])}{j}" + (f" · {ev['venue']}" if ev["venue"] else ""))
-    names = ["Vue d'ensemble", "Participants et inscriptions", "Staff et intervenants", "Logistique", "Communications",
+    names = ["Vue d'ensemble", "Participants", "Staff et intervenants", "Logistique", "Communications",
              "Automatisations", "Historique", "Bilan et suivi post-événement"]
     fns = (section_overview, tab_people, tab_staff, tab_documents, tab_comms, section_automations, tab_journal, section_report)
     for tab, fn in zip(st.tabs(names), fns):
@@ -382,6 +383,56 @@ def tab_tasks(cx, ev):
         rerun(cx)
 
 
+def _people_views(cx, ev, regs):
+    """Deux vues des inscrits : tableau complet filtrable (équipe en 1re colonne) et vue par équipe."""
+    names = store.team_names(regs)
+    label = lambda r: names.get(r["id"], "— seul(e)")  # noqa: E731
+    v_all, v_teams = st.tabs(["Inscrits", "Par équipe"])
+    with v_all:
+        df = pd.DataFrame([{"id": r["id"], "Équipe": label(r), "Prénom": r["prenom"], "Nom": r["nom"], "Entreprise": r["company"],
+                            "E-mail": r["email"], "Téléphone": r["phone"], "Type": r["type"], "Niveau": r["level"],
+                            "Enjeux": r["stakes"], "Poule": r["poule"], "T-shirt": r["size"],
+                            "Invitation": INVITE_LABELS[r["invite_status"]]} for r in regs])
+        cols = [c for c in df.columns if c != "id"]
+        shown = st.multiselect("Colonnes affichées", cols, default=cols, key=f"cols-{ev['id']}")
+        with st.expander("Filtrer les lignes"):
+            f1, f2, f3 = st.columns(3)
+            query = f1.text_input("Recherche (toutes colonnes)", key=f"q-{ev['id']}")
+            picks = {}
+            for widget, col in ((f2, "Équipe"), (f3, "Entreprise"), (f1, "Type"), (f2, "Niveau"), (f3, "Poule"), (f1, "Invitation")):
+                opts = sorted({v for v in df[col] if v not in (None, "")})
+                picks[col] = widget.multiselect(col, opts, key=f"f-{col}-{ev['id']}")
+        view = df
+        if query.strip():
+            q = query.strip().lower()
+            view = view[view[cols].astype(str).apply(lambda row: q in " ".join(row).lower(), axis=1)]
+        for col, chosen in picks.items():
+            if chosen:
+                view = view[view[col].isin(chosen)]
+        if len(view) != len(df):
+            st.caption(f"{len(view)} ligne(s) sur {len(df)}.")
+        sig = abs(hash((query, tuple(sorted((k, tuple(v)) for k, v in picks.items())), tuple(shown))))  # l'éditeur repart à zéro si la vue change
+        edited = st.data_editor(view, hide_index=True, key=f"regs-{ev['id']}-{sig}", column_order=[c for c in shown],
+                                disabled=[c for c in df.columns if c != "Invitation"],
+                                column_config={"Invitation": st.column_config.SelectboxColumn("Invitation", options=list(INVITE_LABELS.values()), required=True)})
+        back = {v: k for k, v in INVITE_LABELS.items()}
+        cur = {r["id"]: r["invite_status"] for r in regs}
+        changes = [(int(r["id"]), back[r["Invitation"]]) for _, r in edited.iterrows() if back[r["Invitation"]] != cur[int(r["id"])]]
+        if changes and st.button(f"Enregistrer {len(changes)} statut(s)", key=f"save-regs-{ev['id']}"):
+            for rid, status in changes:
+                store.set_invite_status(cx, rid, status)
+            rerun(cx)
+    with v_teams:
+        rows = [{"Équipe": names[r["id"]], "Nom": r["nom"], "Prénom": r["prenom"], "Entreprise": r["company"]}
+                for r in sorted(regs, key=lambda r: (r["id"] if r["id"] in names else 10**9)) if r["id"] in names]
+        rows.sort(key=lambda d: [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", d["Équipe"])])
+        solos = [{"Équipe": "— seul(e), à apparier —", "Nom": r["nom"], "Prénom": r["prenom"], "Entreprise": r["company"]}
+                 for r in regs if r["id"] not in names and (r["type"] or "Tournoi").lower() != "cocktail"]
+        st.caption(f"{len({d['Équipe'] for d in rows})} équipe(s) de 2 · {len(solos)} inscrit(s) seul(s) à apparier "
+                   "(l'appariement par niveau se fait dans « Logistique » → Calculer poules et planning).")
+        st.dataframe(pd.DataFrame(rows + solos, columns=["Équipe", "Nom", "Prénom", "Entreprise"]), hide_index=True)
+
+
 def tab_people(cx, ev):
     regs = store.list_registrations(cx, ev["id"])
     k = store.participation(regs, ev["capacity"])
@@ -389,10 +440,13 @@ def tab_people(cx, ev):
     c1.metric("Participants", k["participants"], help="Hors cocktail et refus")
     c2.metric("Équipes de 2", k["teams"])
     c3.metric("Inscrits seuls", k["solos"], help="Appariés par niveau à la constitution des poules")
-    c4.metric("Places restantes", "—" if k["places_left"] is None else k["places_left"],
-              help="Capacité de l'événement moins participants" if ev["capacity"] else "Renseignez la capacité dans Vue d'ensemble")
-    st.caption(f"Soit **{k['teams_total']} équipe(s)** au total une fois les inscrits seuls appariés"
-               + (" (un joueur resterait sans coéquipier)." if k["odd"] else "."))
+    c4.metric("Équipes au total", k["teams_total"], help="Une fois les inscrits seuls appariés" + (" (un joueur resterait sans coéquipier)" if k["odd"] else ""))
+    if ev["capacity"]:
+        st.caption(f"Places restantes : **{k['places_left']}** sur {ev['capacity']}.")
+    if not regs:
+        st.info("Aucun inscrit enregistré pour cet événement. Synchronisez Typeform (bloc ci-dessous) ou importez un fichier.")
+    else:
+        _people_views(cx, ev, regs)
     with st.expander("Connexion Typeform (inscriptions automatiques)", expanded=not ev["typeform_id"]):
         tid = st.text_input("Identifiant du formulaire Typeform", value=ev["typeform_id"] or "", key=f"tfid-{ev['id']}",
                             help="La fin de l'adresse du formulaire : https://xxx.typeform.com/to/IDENTIFIANT")
@@ -456,24 +510,6 @@ def tab_people(cx, ev):
                 rep = importer.import_signups(cx, data, ev["name"], get_settings())
                 flash(rep.line())
                 rerun(cx)
-    if not regs:
-        st.info("Aucun inscrit enregistré pour cet événement. Synchronisez Typeform (bloc ci-dessus) ou importez un fichier.")
-    if regs:
-        df = pd.DataFrame([{"id": r["id"], "Prénom": r["prenom"], "Nom": r["nom"], "Entreprise": r["company"],
-                            "E-mail": r["email"], "Téléphone": r["phone"], "Type": r["type"], "Équipe": r["team"],
-                            "Niveau": r["level"], "Enjeux": r["stakes"], "Poule": r["poule"],
-                            "T-shirt": r["size"], "Invitation": INVITE_LABELS[r["invite_status"]]}
-                           for r in regs])
-        edited = st.data_editor(df, hide_index=True, key=f"regs-{ev['id']}", column_order=[c for c in df.columns if c != "id"],
-                                disabled=[c for c in df.columns if c != "Invitation"],
-                                column_config={"Invitation": st.column_config.SelectboxColumn("Invitation", options=list(INVITE_LABELS.values()), required=True)})
-        back = {v: k for k, v in INVITE_LABELS.items()}
-        cur = {r["id"]: r["invite_status"] for r in regs}
-        changes = [(int(r["id"]), back[r["Invitation"]]) for _, r in edited.iterrows() if back[r["Invitation"]] != cur[int(r["id"])]]
-        if changes and st.button(f"Enregistrer {len(changes)} statut(s)", key=f"save-regs-{ev['id']}"):
-            for rid, status in changes:
-                store.set_invite_status(cx, rid, status)
-            rerun(cx)
     with st.expander("Ignorer une inscription (test, doublon…)"):
         st.caption("L'inscription disparaît de la liste et des compteurs, et les prochaines synchronisations Typeform ne la recréent pas. "
                    "Elle reste dans Typeform ; vous pouvez la rétablir.")
@@ -597,8 +633,9 @@ def tab_documents(cx, ev):
     status_label = {"a_inviter": "Not started", "invite": "Pas de réponse", "accepte": "Acceptée", "refuse": "Refusée",
                     "erreur": "Erreur mail"}
     regs = store.list_registrations(cx, ev["id"])
+    tnames = store.team_names(regs)   # nom d'équipe = entreprise (« Entreprise 2 » en cas d'homonymie)
     parts = [Participant(id=str(r["id"]), prenom=r["prenom"], nom=r["nom"], email=r["email"], telephone=r["phone"],
-                         company=r["company"], team=r["team"], level=r["level"], size=r["size"], type=r["type"],
+                         company=r["company"], team=tnames.get(r["id"], ""), level=r["level"], size=r["size"], type=r["type"],
                          invite_status=status_label[r["invite_status"]], poule=r["poule"]) for r in regs]
     if not ev["date"]:
         st.warning("Renseignez la date de l'événement.")

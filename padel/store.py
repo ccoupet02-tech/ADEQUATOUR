@@ -171,6 +171,25 @@ def list_registrations(cx, event_id: int | None = None) -> list[dict]:
     return rows
 
 
+def team_names(regs: list[dict]) -> dict[int, str]:
+    """id d'inscription -> nom d'équipe affiché : le nom de l'ENTREPRISE ; si deux équipes ont la même entreprise,
+    la 2e s'appelle « Entreprise 2 », la 3e « Entreprise 3 »… (ordre d'inscription). Les inscrits seuls n'en ont pas."""
+    groups: dict[str, list[dict]] = {}
+    for r in sorted(regs, key=lambda r: r["id"]):
+        if r["team"]:
+            groups.setdefault(norm(r["team"]), []).append(r)
+    used: dict[str, int] = {}
+    out: dict[int, str] = {}
+    for members in groups.values():
+        company = next(((m["company"] or "").strip() for m in members if (m["company"] or "").strip()), "")
+        base = company or members[0]["team"]
+        used[norm(base)] = used.get(norm(base), 0) + 1
+        label = base if used[norm(base)] == 1 else f"{base} {used[norm(base)]}"
+        for m in members:
+            out[m["id"]] = label
+    return out
+
+
 def participation(regs: list[dict], capacity: int | None = None) -> dict:
     """Chiffres clés des inscriptions : participants, équipes de 2, inscrits seuls, équipes à constituer, places."""
     tournoi = [r for r in regs if (r["type"] or "Tournoi").lower() != "cocktail"

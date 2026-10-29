@@ -337,3 +337,15 @@ def test_ignoring_a_partner_keeps_the_main_player_as_solo(env):
         importer.sync_typeform(cx, "ANGERS", FakeTF(RESPONSES), s)
         regs = {r["nom"]: r for r in store.list_registrations(cx, eid)}
     assert set(regs) == {"Roy", "Vidal"} and regs["Roy"]["team"] == ""
+
+
+def test_team_names_are_company_names_with_numbering():
+    regs = [dict(id=1, team="Diaz / Ray", company="Acme", type="Tournoi"), dict(id=2, team="Diaz / Ray", company="Acme", type="Tournoi"),
+            dict(id=3, team="Bob / Cat", company="Acme", type="Tournoi"), dict(id=4, team="Bob / Cat", company="Acme", type="Tournoi"),
+            dict(id=5, team="Lee / Fox", company="", type="Tournoi"), dict(id=6, team="Lee / Fox", company="", type="Tournoi"),
+            dict(id=7, team="Zed / Yo", company="Beta", type="Tournoi"), dict(id=8, team="Zed / Yo", company="Beta", type="Tournoi"),
+            dict(id=9, team="Max / Ali", company="ACME ", type="Tournoi"), dict(id=10, team="Max / Ali", company="Acme", type="Tournoi"),
+            dict(id=11, team="", company="Solo SA", type="Tournoi")]
+    n = store.team_names(regs)
+    assert n[1] == n[2] == "Acme" and n[3] == n[4] == "Acme 2" and n[9] == n[10] == "ACME 3"
+    assert n[5] == "Lee / Fox" and n[7] == "Beta" and 11 not in n          # sans entreprise : on garde l'identifiant ; seul : pas d'équipe

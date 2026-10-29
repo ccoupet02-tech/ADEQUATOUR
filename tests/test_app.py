@@ -77,7 +77,7 @@ def test_seed_then_pages_show_data(app):
     goto(app, f"event:{bordeaux}")
     assert not app.exception, app.exception
     assert len(app.tabs) == 8
-    assert [t.label for t in app.tabs] == ["Vue d'ensemble", "Participants et inscriptions", "Staff et intervenants",
+    assert [t.label for t in app.tabs] == ["Vue d'ensemble", "Participants", "Staff et intervenants",
                                            "Logistique", "Communications", "Automatisations", "Historique",
                                            "Bilan et suivi post-événement"]
 
@@ -145,7 +145,10 @@ def test_angers_event_page_with_signups_renders(app):
         eid = store.get_event(cx, "ANGERS")["id"]
     goto(app, f"event:{eid}")
     m = {x.label: x.value for x in app.metric}
-    assert m["Participants"] == "15" and m["Équipes de 2"] == "6" and m["Inscrits seuls"] == "3"
+    assert m["Participants"] == "15" and m["Équipes de 2"] == "6" and m["Inscrits seuls"] == "3" and m["Équipes au total"] == "8"
+    assert [t.label for t in app.tabs if t.label in ("Inscrits", "Par équipe")] == ["Inscrits", "Par équipe"]
+    teams = next(d for d in app.dataframe if list(d.value.columns) == ["Équipe", "Nom", "Prénom", "Entreprise"])
+    assert len(teams.value) == 15 and teams.value["Équipe"].iloc[0].startswith("Société ")
     next(b for b in app.button if b.label == "Calculer poules et planning").click().run()
     assert not app.exception, app.exception
     assert any("8 équipes · 2 poule(s)" in s.value for s in app.success)
