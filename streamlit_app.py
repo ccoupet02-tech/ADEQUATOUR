@@ -409,12 +409,20 @@ def _people_views(cx, ev, regs):
         for col, chosen in picks.items():
             if chosen:
                 view = view[view[col].isin(chosen)]
+        s1, s2 = st.columns([3, 2])
+        sort_col = s1.selectbox("Trier par", ["(ordre d'inscription)"] + list(shown), key=f"sort-{ev['id']}")
+        sort_dir = s2.radio("Ordre", ["A → Z / croissant", "Z → A / décroissant"], horizontal=True, key=f"sortdir-{ev['id']}")
+        if sort_col in view.columns:
+            desc = sort_dir.startswith("Z")
+            view = view.sort_values(sort_col, ascending=not desc, key=lambda c: c.map(
+                lambda v: (0, float(v)) if str(v).replace(",", ".").replace(".", "", 1).isdigit() else (1, str(v).lower())),
+                na_position="last")
         if len(view) != len(df):
             st.caption(f"{len(view)} ligne(s) sur {len(df)}.")
         st.caption("✏️ Cliquez dans une cellule pour la modifier ; la ligne vide en bas du tableau (ou le « + ») ajoute un participant ; "
                    "sélectionnez une ligne puis la corbeille pour la retirer. Rien n'est enregistré avant « Enregistrer ». "
                    "Vos modifications ne sont plus écrasées par la synchronisation Typeform.")
-        sig = abs(hash((query, tuple(sorted((k, tuple(v)) for k, v in picks.items())), tuple(shown), len(regs))))
+        sig = abs(hash((query, tuple(sorted((k, tuple(v)) for k, v in picks.items())), tuple(shown), len(regs), sort_col, sort_dir)))
         types = sorted({"Tournoi", "Initiation", "Cocktail", *[t for t in df["Type"] if t]})
         sizes = ["XS", "S", "M", "L", "XL", "XXL"]
         edited = st.data_editor(
