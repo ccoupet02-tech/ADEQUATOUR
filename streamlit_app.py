@@ -420,13 +420,13 @@ def _people_views(cx, ev, regs):
         if len(view) != len(df):
             st.caption(f"{len(view)} ligne(s) sur {len(df)}.")
         st.caption("✏️ Cliquez dans une cellule pour la modifier ; la ligne vide en bas du tableau (ou le « + ») ajoute un participant ; "
-                   "sélectionnez une ligne puis la corbeille pour la retirer. Rien n'est enregistré avant « Enregistrer ». "
+                   "sélectionnez une ligne puis la corbeille pour la retirer. Les modifications de cellules s'enregistrent toutes seules ; les ajouts et retraits demandent « Enregistrer ». "
                    "Vos modifications ne sont plus écrasées par la synchronisation Typeform.")
         sig = abs(hash((query, tuple(sorted((k, tuple(v)) for k, v in picks.items())), tuple(shown), len(regs), sort_col, sort_dir)))
         types = sorted({"Tournoi", "Initiation", "Cocktail", *[t for t in df["Type"] if t]})
         sizes = ["XS", "S", "M", "L", "XL", "XXL"]
         edited = st.data_editor(
-            view, hide_index=True, num_rows="dynamic", key=f"regs-{ev['id']}-{sig}", column_order=list(shown),
+            view, hide_index=True, num_rows="dynamic", key=f"regs-{ev['id']}-{sig}-{st.session_state.get(f'regs-v-{ev['id']}', 0)}", column_order=list(shown),
             disabled=["id", "Équipe"],
             column_config={"Invitation": st.column_config.SelectboxColumn("Invitation", options=list(INVITE_LABELS.values())),
                            "Type": st.column_config.SelectboxColumn("Type", options=types),
@@ -454,6 +454,11 @@ def _people_views(cx, ev, regs):
             if person or reg or status:
                 edits.append((rid, person, reg, status))
         removed = [rid for rid in by_id if rid not in kept]
+        if edits and not adds and not removed:  # simples modifications : enregistrées tout de suite (un rafraîchissement ne les perd plus)
+            for rid, person, reg, status in edits:
+                store.update_participant(cx, rid, person, {**reg, **({"invite_status": status} if status else {})})
+            st.session_state[f"regs-v-{ev['id']}"] = st.session_state.get(f"regs-v-{ev['id']}", 0) + 1
+            rerun(cx)
         if edits or adds or removed:
             st.info(f"À enregistrer : {len(edits)} modification(s), {len(adds)} ajout(s), {len(removed)} retrait(s).")
             ok_rm = True
